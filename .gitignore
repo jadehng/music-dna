@@ -1,0 +1,7 @@
+node_modules/
+.netlify/
+.env
+*.log
+.DS_Store
+1775832391951-player-script.js
+1775832391961-player-script.js

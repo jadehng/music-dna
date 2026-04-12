@@ -1,0 +1,461 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Music DNA - Analyze, Prompt & Edit</title>
+  <link rel="stylesheet" href="style.css">
+  <link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@300;400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+</head>
+<body>
+  <div class="app">
+    <header>
+      <h1><span class="gradient-text">Music DNA</span></h1>
+      <p class="subtitle">Analyse. Prompt. Edit. Publie.</p>
+    </header>
+
+    <!-- ═══ MAIN TABS: Pre-prod / Post-prod ═══ -->
+    <nav class="main-tabs">
+      <button class="main-tab active" data-main="preprod">
+        <span class="main-tab-icon">&#9835;</span>
+        Pre-prod
+        <span class="main-tab-desc">Analyse & Prompt Suno</span>
+      </button>
+      <button class="main-tab" data-main="postprod">
+        <span class="main-tab-icon">&#9998;</span>
+        Post-prod
+        <span class="main-tab-desc">Edit, Cut & Merge</span>
+      </button>
+    </nav>
+
+    <!-- ════════════════════════════════════════ -->
+    <!-- ═══         PRE-PROD TAB            ═══ -->
+    <!-- ════════════════════════════════════════ -->
+    <main class="main-content" id="main-preprod">
+
+      <!-- Input Section -->
+      <section class="input-section">
+        <div class="tabs">
+          <button class="tab active" data-tab="upload">Upload fichier</button>
+          <button class="tab" data-tab="youtube">YouTube URL</button>
+        </div>
+
+        <div class="tab-content" id="tab-upload">
+          <div class="drop-zone" id="dropZone">
+            <div class="drop-zone-icon">
+              <svg width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
+                <path d="M9 19V13H5L12 5L19 13H15V19H9Z"/>
+                <path d="M5 21H19"/>
+              </svg>
+            </div>
+            <p>Glisse ton fichier audio ici</p>
+            <p class="small">MP3, WAV, FLAC, OGG - Max 50MB</p>
+            <input type="file" id="fileInput" accept="audio/*" hidden multiple>
+            <button class="btn btn-outline" id="browseBtn">Parcourir</button>
+          </div>
+        </div>
+
+        <div class="tab-content hidden" id="tab-youtube">
+          <div class="youtube-input">
+            <input type="text" id="youtubeUrl" placeholder="https://www.youtube.com/watch?v=..." />
+            <button class="btn btn-primary" id="analyzeYtBtn">Analyser</button>
+          </div>
+          <p class="hint">Colle un lien YouTube et on extrait l'audio automatiquement</p>
+        </div>
+      </section>
+
+      <!-- Loading -->
+      <section class="loading-section hidden" id="loadingSection">
+        <div class="loader"><div class="loader-ring"></div><div class="loader-ring"></div><div class="loader-ring"></div></div>
+        <p class="loading-text" id="loadingText">Analyse en cours...</p>
+      </section>
+
+      <!-- Results Section -->
+      <section class="results-section hidden" id="resultsSection">
+        <h2 class="section-title">Analyse de <span id="trackName">-</span></h2>
+
+        <div class="player-card">
+          <audio id="audioPlayer" controls></audio>
+          <canvas id="waveformCanvas" width="800" height="100"></canvas>
+        </div>
+
+        <div class="metrics-grid">
+          <div class="metric-card">
+            <div class="metric-label">BPM</div>
+            <div class="metric-value" id="bpmValue">-</div>
+            <div class="metric-sub" id="bpmConfidence">-</div>
+          </div>
+          <div class="metric-card">
+            <div class="metric-label">Tonalite</div>
+            <div class="metric-value" id="keyValue">-</div>
+            <div class="metric-sub" id="keyScale">-</div>
+          </div>
+          <div class="metric-card">
+            <div class="metric-label">Energie</div>
+            <div class="metric-value" id="energyValue">-</div>
+            <div class="metric-sub" id="energyLabel">-</div>
+          </div>
+          <div class="metric-card">
+            <div class="metric-label">Duree</div>
+            <div class="metric-value" id="durationValue">-</div>
+            <div class="metric-sub" id="durationSub">-</div>
+          </div>
+        </div>
+
+        <div class="analysis-grid">
+          <div class="analysis-card">
+            <h3>Spectre frequentiel</h3>
+            <canvas id="spectrumCanvas" width="400" height="200"></canvas>
+          </div>
+          <div class="analysis-card">
+            <h3>Caracteristiques</h3>
+            <div class="characteristics" id="characteristics">
+              <div class="char-row"><span class="char-label">Danceability</span><div class="char-bar"><div class="char-fill" id="danceBar"></div></div><span class="char-value" id="danceValue">-</span></div>
+              <div class="char-row"><span class="char-label">Darkness</span><div class="char-bar"><div class="char-fill" id="darkBar"></div></div><span class="char-value" id="darkValue">-</span></div>
+              <div class="char-row"><span class="char-label">Complexity</span><div class="char-bar"><div class="char-fill" id="complexBar"></div></div><span class="char-value" id="complexValue">-</span></div>
+              <div class="char-row"><span class="char-label">Bass Weight</span><div class="char-bar"><div class="char-fill" id="bassBar"></div></div><span class="char-value" id="bassValue">-</span></div>
+              <div class="char-row"><span class="char-label">Brightness</span><div class="char-bar"><div class="char-fill" id="brightBar"></div></div><span class="char-value" id="brightValue">-</span></div>
+              <div class="char-row"><span class="char-label">Hypnotic</span><div class="char-bar"><div class="char-fill" id="hypnoBar"></div></div><span class="char-value" id="hypnoValue">-</span></div>
+            </div>
+          </div>
+        </div>
+
+        <div class="analysis-card full-width">
+          <h3>Genre detecte & Tags</h3>
+          <div class="tags" id="genreTags"></div>
+        </div>
+
+        <!-- ═══ PROMPT STUDIO ═══ -->
+        <div class="studio-card" id="promptStudio">
+          <h2 class="studio-title">Prompt Studio</h2>
+          <p class="studio-subtitle">Decris ta vision, on la fusionne avec l'analyse technique</p>
+
+          <div class="studio-section">
+            <h3>Ta vision creative</h3>
+            <p class="studio-hint">Ecris librement ce que tu imagines. On fusionne tout avec les donnees techniques.</p>
+            <textarea id="creativeInput" rows="5" placeholder="Ex: Un voyage nocturne dans un warehouse a Berlin. Ambiance sombre et hypnotique, basses lourdes. On commence dans le brouillard, la tension monte. Sons acid et textures metalliques. Le drop est brutal. Melange de dark techno et d'EBM industriel."></textarea>
+          </div>
+
+          <div class="studio-section">
+            <h3>Inspirations <span class="studio-hint-inline">(survole pour details, clique pour ajouter)</span></h3>
+
+            <div class="inspo-group">
+              <span class="inspo-label">Scenes :</span>
+              <div class="inspo-chips">
+                <button class="inspo-chip" data-text="warehouse underground a Berlin, beton brut, stroboscopes" data-tip="Espace industriel brut, murs en beton, eclairage minimal stroboscopique. Son reverberant et puissant. Ambiance illegale, underground.">Warehouse Berlin</button>
+                <button class="inspo-chip" data-text="dark club style Berghain, systeme son massif, noir total" data-tip="Club mythique berlinois. Obscurite totale, son Funktion-One, foule exigeante. Reference ultime du techno underground.">Dark Club</button>
+                <button class="inspo-chip" data-text="festival mainstage, foule immense, lasers" data-tip="Scene principale de festival. 50k+ personnes, production lasers/pyro massive. Son stadium, peak time. Tomorrowland/Awakenings vibes.">Festival</button>
+                <button class="inspo-chip" data-text="after-hours a 5h du matin, intimiste, yeux fermes" data-tip="Fin de soiree, petit comite. Musique plus profonde et meditative. Les gens dansent les yeux fermes. Moment de connexion.">After Hours</button>
+                <button class="inspo-chip" data-text="rave dans le desert au lever du soleil, cosmique" data-tip="Open air desert, lever de soleil. Burning Man / Midburn vibes. Sons cosmiques, sentiment de liberte totale, spirituel.">Desert Rave</button>
+                <button class="inspo-chip" data-text="petit club basement a Tokyo, neon, futuriste" data-tip="Micro-club japonais, 50 personnes max. Neons, design futuriste. Son precis et experimental. Esthetique cyberpunk.">Tokyo Basement</button>
+                <button class="inspo-chip" data-text="rave secrete en foret, brouillard, sons tribaux" data-tip="Rave illegale en nature. Arbres, brouillard, feu. Percussion organique, sons tribaux. Connexion avec la nature et le primal.">Forest Rave</button>
+                <button class="inspo-chip" data-text="laboratoire dystopique, sci-fi, machines et circuits" data-tip="Ambiance sci-fi/cyberpunk. Machines industrielles, circuits electroniques. Sons metalliques et glitch. REZZ / Gesaffelstein vibes.">Dystopian Lab</button>
+                <button class="inspo-chip" data-text="caverne sous-marine, bioluminescence, profondeur" data-tip="Ambiance aquatique immersive. Sons filtres comme sous l'eau, reverb oceanique. Textures liquides, pression des profondeurs.">Underwater</button>
+              </div>
+            </div>
+
+            <div class="inspo-group">
+              <span class="inspo-label">Ambiances :</span>
+              <div class="inspo-chips">
+                <button class="inspo-chip" data-text="tension qui monte progressivement puis release explosive" data-tip="Arc classique : accumulation de layers, snare rolls, filtre qui monte, puis liberation totale. Le contraste cree l'emotion.">Tension / Release</button>
+                <button class="inspo-chip" data-text="descente dans les tenebres, de plus en plus lourd et sombre" data-tip="Progressivement plus noir et oppressant. Basses de plus en plus lourdes, frequences de plus en plus graves. Claustrophobique.">Dark Descent</button>
+                <button class="inspo-chip" data-text="montee euphorique, energie croissante, catharsis" data-tip="Build-up emotionnel positif. Layers melodiques qui s'ajoutent, crescendo vers un moment de pure euphorie collective.">Euphoric Rise</button>
+                <button class="inspo-chip" data-text="hypnotique et repetitif, induisant un etat de transe" data-tip="Repetition minimale avec micro-variations. Le cerveau entre en etat modifie. Patterns cycliques, groove immuable. Villalobos style.">Hypnotic Trance</button>
+                <button class="inspo-chip" data-text="poursuite menacante, mouvement relentless, predateur" data-tip="Impression d'etre poursuivi. Kick rapide et insistant, bassline agressive. Tension permanente, pas de repit.">Menacing Pursuit</button>
+                <button class="inspo-chip" data-text="voyage cosmique, apesanteur, paysages aliens" data-tip="Sensation de flotter dans l'espace. Pads cosmiques, delays infinis, textures stellaires. Meditation spatiale.">Cosmic Journey</button>
+                <button class="inspo-chip" data-text="nostalgie melancolique, souvenirs, beaute dans la tristesse" data-tip="Melodie mineure emotive. Pads chauds, chord progressions melancoliques. Sentiment de beau-triste. End of the night.">Melancholic</button>
+                <button class="inspo-chip" data-text="energie brute, sans pitie, intensite maximale" data-tip="Pas de subtilite, impact direct. Kicks distordus, tempo rapide, percussions metalliques. Mosh pit energy.">Raw Energy</button>
+              </div>
+            </div>
+
+            <div class="inspo-group">
+              <span class="inspo-label">Sons :</span>
+              <div class="inspo-chips">
+                <button class="inspo-chip" data-text="acid 303 bassline" data-tip="Roland TB-303: le son acid iconique. Bassline squelchy, resonance qui filtre. Signature du acid house/techno depuis 1987.">Acid 303</button>
+                <button class="inspo-chip" data-text="sub-bass 808 lourd" data-tip="Roland TR-808 kick/bass. Sub-frequences profondes qui se sentent dans le ventre. Fondation des genres bass music et trap.">808 Sub</button>
+                <button class="inspo-chip" data-text="synths modulaires" data-tip="Sons generes par synthe modulaire (Eurorack, Moog). Textures uniques, imprevisibles, organiques malgre l'electronique.">Modular</button>
+                <button class="inspo-chip" data-text="kicks distordus" data-tip="Kick drum pousse dans la saturation/distortion. Plus agressif et percutant. Signature du hard techno et industrial.">Distorted Kicks</button>
+                <button class="inspo-chip" data-text="nappes ethereales" data-tip="Accords tenus en arriere-plan (pads). Textures atmospheriques, souvent reverberees. Creent la profondeur et l'espace.">Pads</button>
+                <button class="inspo-chip" data-text="glitch et artefacts numeriques" data-tip="Erreurs digitales volontaires: bits crushes, buffer glitches, micro-edits. Esthetique du bug comme art. Autechre vibes.">Glitch</button>
+                <button class="inspo-chip" data-text="percussions industrielles metalliques" data-tip="Percussions faites de sons metalliques: toles, chaines, machines. Clangs et hits brutaux. Ambiance usine.">Industrial Perc</button>
+                <button class="inspo-chip" data-text="hi-hats et rides croustillants" data-tip="Cymbales avec presence haute frequence nette. Apportent le groove et l'air dans le mix. Open/closed hat patterns.">Hi-Hats</button>
+                <button class="inspo-chip" data-text="vocal chops et murmures" data-tip="Fragments vocaux decoupes et rearranges. Murmures, souffles, mots isoles. Element humain dans l'electronique.">Vocals</button>
+                <button class="inspo-chip" data-text="arpeges synthetiques" data-tip="Notes jouees en sequence rapide (arpeggiator). Patterns melodiques repetitifs et hypnotiques. Sequence style.">Arpeggios</button>
+                <button class="inspo-chip" data-text="drones sombres" data-tip="Notes tres longues et graves tenues. Creent une tension sourde en arriere-plan. Effet oppressant ou meditatif.">Drones</button>
+                <button class="inspo-chip" data-text="risers et impacts cinematiques" data-tip="Effets de montee (whoosh, sweep) et impacts (boom). Marquent les transitions et les drops. Style trailer/cinema.">Cinematic FX</button>
+              </div>
+            </div>
+
+            <div class="inspo-group">
+              <span class="inspo-label">Genres :</span>
+              <div class="inspo-chips">
+                <button class="inspo-chip" data-text="minimal techno" data-tip="Techno epuree: peu d'elements mais grooves precis. Richie Hawtin, Plastikman. Repetition et subtilite. 125-130 BPM.">Minimal Techno</button>
+                <button class="inspo-chip" data-text="dark techno" data-tip="Techno sombre et industrielle. Atmospheres oppressantes, textures metalliques. SNTS, Dax J. 130-140 BPM.">Dark Techno</button>
+                <button class="inspo-chip" data-text="acid techno" data-tip="Techno basee sur les sons acid TB-303. Squelchy, resonant, hypnotique. 303 State, Tin Man. 130-140 BPM.">Acid Techno</button>
+                <button class="inspo-chip" data-text="industrial techno" data-tip="Fusion techno et industrial: bruits de machines, distortion, agressif. Perc, Ansome. 135-145 BPM.">Industrial</button>
+                <button class="inspo-chip" data-text="melodic techno" data-tip="Techno avec elements melodiques et emotionnels. Afterlife, Tale Of Us. Pads, arpeges. 120-128 BPM.">Melodic Techno</button>
+                <button class="inspo-chip" data-text="midtempo bass" data-tip="Bass music lente et lourde. REZZ, 1788-L. Basses massives, glitch, hypnotique. 90-110 BPM.">Midtempo Bass</button>
+                <button class="inspo-chip" data-text="dark electro EBM" data-tip="Electronic Body Music: basses sequencees, voix sombres. DAF, Nitzer Ebb. Dansant mais noir.">Dark Electro</button>
+                <button class="inspo-chip" data-text="psytrance" data-tip="Trance psychedelique: basslines roulantes, FX cosmiques, melodies hypnotiques. 140-150 BPM. Goa vibes.">Psytrance</button>
+                <button class="inspo-chip" data-text="synthwave" data-tip="Retro-futurisme 80s: synths analogiques, arpeges, pads chauds. Drive, Stranger Things. Nostalgique.">Synthwave</button>
+                <button class="inspo-chip" data-text="darkwave" data-tip="Synthwave plus sombre: atmospheres gothiques, voix graves, minor keys. Boy Harsher, Cold Cave.">Darkwave</button>
+                <button class="inspo-chip" data-text="breakbeat" data-tip="Rythmes brises (non 4/4): grooves syncopees, samples de breaks. Chemical Brothers, Hybrid.">Breakbeat</button>
+                <button class="inspo-chip" data-text="ambient" data-tip="Textures sonores sans beat. Atmosphere pure, paysages sonores. Brian Eno, Tim Hecker. Contemplatif.">Ambient</button>
+              </div>
+            </div>
+          </div>
+
+          <div class="studio-section">
+            <h3>Suno v5 Tags <span class="studio-hint-inline">(metatags avances, clique pour ajouter)</span></h3>
+
+            <div class="inspo-group">
+              <span class="inspo-label">Mood :</span>
+              <div class="inspo-chips">
+                <button class="inspo-chip" data-text="uplifting, joyful" data-tip="[Mood: Uplifting] — harmoniques brillantes, cle majeure. Ambiance positive et lumineuse.">Uplifting</button>
+                <button class="inspo-chip" data-text="melancholic, somber" data-tip="[Mood: Somber] — dynamiques attenuees, tempo lent. Beaute dans la tristesse.">Somber</button>
+                <button class="inspo-chip" data-text="haunting, dark eerie" data-tip="[Mood: Haunting] — timbre vocal sombre et inquietant. Atmosphere eerie.">Haunting</button>
+                <button class="inspo-chip" data-text="triumphant, crescendo" data-tip="[Mood: Triumphant] — crescendo, cuivres/cordes en renfort. Moment epique.">Triumphant</button>
+                <button class="inspo-chip" data-text="introspective, contemplative" data-tip="[Mood: Introspective] — intime, personnel. Rythme pose, textures delicates.">Introspective</button>
+                <button class="inspo-chip" data-text="intense, aggressive" data-tip="[Mood: Intense] — compression, frequences poussees. Impact maximal.">Intense</button>
+              </div>
+            </div>
+
+            <div class="inspo-group">
+              <span class="inspo-label">Texture :</span>
+              <div class="inspo-chips">
+                <button class="inspo-chip" data-text="tape-saturated warmth" data-tip="[Texture: Tape-Saturated] — saturation analogique, chaleur de bande magnetique.">Tape Saturated</button>
+                <button class="inspo-chip" data-text="vinyl hiss, lo-fi" data-tip="[Texture: Vinyl Hiss] — craquements de vinyle, grain lo-fi. Nostalgie sonore.">Vinyl Hiss</button>
+                <button class="inspo-chip" data-text="gentle sidechain compression" data-tip="[Texture: Gentle Sidechain] — pompage subtil lie au kick. Groove respirant.">Sidechain</button>
+                <button class="inspo-chip" data-text="clean mix, studio-grade clarity" data-tip="[Production: Clean, modern] — separation nette, mix professionnel. Reduit les artefacts.">Clean Mix</button>
+                <button class="inspo-chip" data-text="analog warmth, vintage production" data-tip="[Production: Analog, warm] — son analogique, chaleur des synths vintage.">Analog Warm</button>
+              </div>
+            </div>
+
+            <div class="inspo-group">
+              <span class="inspo-label">Vocal :</span>
+              <div class="inspo-chips">
+                <button class="inspo-chip" data-text="whispered vocals, breathy, intimate" data-tip="[Vocal Style: Whisper Soul] — intimite lo-fi, souffle audible, micro de pres.">Whisper</button>
+                <button class="inspo-chip" data-text="raspy, smoky voice" data-tip="Timbre rauque et enfume. Voix avec du grain, chaude et expressive.">Raspy/Smoky</button>
+                <button class="inspo-chip" data-text="spoken word, conversational" data-tip="[Spoken Word] — parle plutot que chante. Style narratif, slam, poetry.">Spoken Word</button>
+                <button class="inspo-chip" data-text="choir, harmonies, gospel" data-tip="[Choir] / [Gospel Choir] — voix multiples, harmonies riches. Puissance collective.">Choir</button>
+                <button class="inspo-chip" data-text="no vocals, instrumental only" data-tip="[Instrumental] — pas de voix. Musique purement instrumentale. Mettre aussi le toggle Instrumental dans Suno.">Instrumental</button>
+              </div>
+            </div>
+
+            <div class="inspo-group">
+              <span class="inspo-label">Fusions :</span>
+              <div class="inspo-chips">
+                <button class="inspo-chip" data-text="gospel trap, 808s, handclaps" data-tip="[Genre: Gospel Trap] — fusion gospel + trap. Choeurs puissants sur 808. Verifie en v5.">Gospel Trap</button>
+                <button class="inspo-chip" data-text="jazz hip hop, smooth, laid-back" data-tip="[Genre: Jazz Hip Hop] — fusion jazz + hip-hop. Samples jazz, boom bap. Nujabes vibes.">Jazz Hip Hop</button>
+                <button class="inspo-chip" data-text="EDM folk, acoustic meets electronic" data-tip="[Genre: EDM Folk] — guitare acoustique + drops electroniques. Avicii style.">EDM Folk</button>
+                <button class="inspo-chip" data-text="punk rock, raw aggressive" data-tip="[Genre: Punk Rock] — guitares distordues, tempo rapide, attitude rebelle. Brut et direct.">Punk Rock</button>
+                <button class="inspo-chip" data-text="afrobeat rhythm, percussive, organic" data-tip="[Genre: Afrobeat] — rythmes africains, percussions organiques, groove polyrhythmique.">Afrobeat</button>
+              </div>
+            </div>
+          </div>
+
+        </div>
+
+        <!-- ═══ 1. PROMPT AUTO-GENERE (from analysis) ═══ -->
+        <div class="prompt-card" id="autoPromptCard">
+          <div class="prompt-card-header">
+            <span class="prompt-card-number">1</span>
+            <div>
+              <h3>Prompt auto-genere</h3>
+              <p class="prompt-card-desc">Genere automatiquement depuis l'analyse technique du morceau</p>
+            </div>
+          </div>
+          <div class="prompt-box" id="sunoPrompt">Analyse un morceau pour generer le prompt...</div>
+          <div class="prompt-actions">
+            <button class="btn btn-outline" id="copyPromptBtn">Copier</button>
+            <button class="btn btn-outline" id="regenerateBtn">Regenerer</button>
+          </div>
+          <div class="prompt-tips">
+            <h4>Conseils :</h4>
+            <ul id="sunoTips"></ul>
+          </div>
+        </div>
+
+        <!-- ═══ 2. PROMPT STUDIO (creative vision) ═══ -->
+        <div class="prompt-card" id="studioPromptCard">
+          <div class="prompt-card-header">
+            <span class="prompt-card-number">2</span>
+            <div>
+              <h3>Prompt Studio</h3>
+              <p class="prompt-card-desc">Ta vision creative : ecris et/ou clique les inspirations</p>
+            </div>
+          </div>
+          <div class="prompt-box" id="studioPromptPreview">Ecris ta vision ci-dessus ou clique des inspirations...</div>
+        </div>
+
+        <!-- ═══ FUSION BUTTON ═══ -->
+        <div class="fusion-cta">
+          <div class="fusion-arrow">1 + 2 =</div>
+          <button class="btn btn-fusion" id="fusionBtn">
+            <span class="fusion-icon">&#9876;</span>
+            Fusionner en prompt final
+          </button>
+          <p class="fusion-hint" id="fusionHint">Combine le prompt auto-genere + ta vision creative en un seul prompt Suno</p>
+        </div>
+
+        <!-- ═══ 3. PROMPT FINAL FUSIONNE ═══ -->
+        <div class="final-prompt-card hidden" id="finalPromptSection">
+          <div class="prompt-card-header">
+            <span class="prompt-card-number final-number">&#10003;</span>
+            <div>
+              <h3>Prompt Suno Final</h3>
+              <p class="prompt-card-desc">Pret a coller dans Suno</p>
+            </div>
+          </div>
+
+          <div class="prompt-output-tabs">
+            <button class="prompt-tab active" data-ptab="style">Style Prompt</button>
+            <button class="prompt-tab" data-ptab="lyrics">Lyrics / Structure</button>
+          </div>
+
+          <div class="prompt-output" id="ptab-style">
+            <div class="prompt-box final" id="finalStylePrompt"></div>
+            <button class="btn btn-primary btn-lg" id="copyFinalInline">Copier le prompt</button>
+          </div>
+          <div class="prompt-output hidden" id="ptab-lyrics">
+            <div class="prompt-box final" id="finalLyricsPrompt"></div>
+            <button class="btn btn-primary btn-lg" id="copyLyricsBtn">Copier les lyrics</button>
+          </div>
+
+          <div class="prompt-tips">
+            <h4>Comment utiliser dans Suno :</h4>
+            <ul>
+              <li>Colle le <strong>Style Prompt</strong> dans le champ "Style of Music"</li>
+              <li>Colle les <strong>Lyrics/Structure</strong> dans le champ "Lyrics" (mode Custom)</li>
+              <li>Active le mode <strong>Custom</strong> dans Suno pour avoir les deux champs</li>
+              <li>Genere 2-3 variations et garde la meilleure</li>
+            </ul>
+          </div>
+        </div>
+      </section>
+    </main>
+
+    <!-- ════════════════════════════════════════ -->
+    <!-- ═══         POST-PROD TAB           ═══ -->
+    <!-- ════════════════════════════════════════ -->
+    <main class="main-content hidden" id="main-postprod">
+
+      <section class="editor-section">
+        <h2 class="section-title">Audio Editor</h2>
+        <p class="studio-subtitle">Importe tes morceaux Suno, coupe, reordonne et exporte un fichier final pour YouTube / Spotify</p>
+
+        <!-- Import tracks -->
+        <div class="editor-import">
+          <div class="drop-zone" id="editorDropZone">
+            <div class="drop-zone-icon">
+              <svg width="36" height="36" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
+                <path d="M12 5v14M5 12h14"/>
+              </svg>
+            </div>
+            <p>Ajoute tes morceaux ici</p>
+            <p class="small">MP3, WAV, FLAC - glisse ou clique</p>
+            <input type="file" id="editorFileInput" accept="audio/*" hidden multiple>
+            <button class="btn btn-outline" id="editorBrowseBtn">Ajouter des fichiers</button>
+          </div>
+        </div>
+
+        <!-- Timeline / Track list -->
+        <div class="editor-timeline" id="editorTimeline">
+          <div class="timeline-empty" id="timelineEmpty">
+            <p>Tes morceaux apparaitront ici. Glisse-les pour les reordonner.</p>
+          </div>
+          <!-- Tracks added dynamically here -->
+        </div>
+
+        <!-- Editor Controls -->
+        <div class="editor-controls hidden" id="editorControls">
+          <div class="editor-controls-row">
+            <button class="btn btn-outline" id="editorPlayAll">
+              <span id="playIcon">&#9654;</span> Ecouter tout
+            </button>
+            <button class="btn btn-outline" id="editorStop">&#9632; Stop</button>
+            <span class="editor-playback-time" id="editorPlaybackTime" style="font-family:var(--mono);font-size:0.9rem;color:var(--accent);display:none;">0:00</span>
+            <span class="editor-total-time" id="editorTotalTime">Total: 0:00</span>
+          </div>
+
+          <div class="editor-controls-row">
+            <div class="editor-field">
+              <label>Crossfade entre morceaux</label>
+              <div class="range-row">
+                <input type="range" id="crossfadeDuration" min="0" max="5" step="0.5" value="0">
+                <span id="crossfadeValue">0s</span>
+              </div>
+            </div>
+            <div class="editor-field">
+              <label>Silence entre morceaux</label>
+              <div class="range-row">
+                <input type="range" id="gapDuration" min="0" max="5" step="0.5" value="1">
+                <span id="gapValue">1s</span>
+              </div>
+            </div>
+          </div>
+
+          <div class="editor-controls-row">
+            <div class="editor-field">
+              <label>Fade-in global</label>
+              <div class="range-row">
+                <input type="range" id="fadeIn" min="0" max="10" step="0.5" value="0">
+                <span id="fadeInValue">0s</span>
+              </div>
+            </div>
+            <div class="editor-field">
+              <label>Fade-out global</label>
+              <div class="range-row">
+                <input type="range" id="fadeOut" min="0" max="10" step="0.5" value="0">
+                <span id="fadeOutValue">0s</span>
+              </div>
+            </div>
+          </div>
+
+          <div class="editor-export">
+            <h3>Exporter</h3>
+            <div class="export-row">
+              <div class="editor-field">
+                <label>Format</label>
+                <select id="exportFormat">
+                  <option value="wav">WAV (qualite max, gros fichier)</option>
+                  <option value="mp3" selected>MP3 (compresse, YouTube/Spotify)</option>
+                </select>
+              </div>
+              <div class="editor-field">
+                <label>Qualite MP3</label>
+                <select id="mp3Bitrate">
+                  <option value="128">128 kbps (petit fichier)</option>
+                  <option value="192">192 kbps (bon compromis)</option>
+                  <option value="256">256 kbps (haute qualite)</option>
+                  <option value="320" selected>320 kbps (max qualite)</option>
+                </select>
+              </div>
+            </div>
+            <div class="editor-field">
+              <label>Nom du fichier</label>
+              <input type="text" id="exportFilename" value="music-dna-export" placeholder="nom-du-fichier">
+            </div>
+            <button class="btn btn-primary btn-lg" id="exportBtn">Exporter le fichier final</button>
+            <div class="export-progress hidden" id="exportProgress">
+              <div class="export-progress-bar"><div class="export-progress-fill" id="exportFill"></div></div>
+              <span class="export-progress-text" id="exportText">Export en cours...</span>
+            </div>
+          </div>
+        </div>
+      </section>
+    </main>
+
+    <footer>
+      <p>Music DNA - Analyse & Edition audio dans le navigateur</p>
+    </footer>
+  </div>
+
+  <!-- lamejs for MP3 encoding -->
+  <script src="https://cdn.jsdelivr.net/npm/lamejs@1.2.1/lame.min.js"></script>
+  <script src="audio-analyzer.js"></script>
+  <script src="prompt-studio.js"></script>
+  <script src="audio-editor.js"></script>
+  <script src="app.js"></script>
+</body>
+</html>
