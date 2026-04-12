@@ -1,19 +1,21 @@
 /**
  * Music DNA - Audio Editor (Post-prod)
- * Cut, reorder, merge audio tracks and export as single file
+ * Cut, reorder, merge, mix audio/video tracks and export
+ * Features: video import, per-track volume, dialogue isolation, overlay mix mode
  * Uses Web Audio API + lamejs for MP3 encoding
  */
 
 class AudioEditor {
   constructor() {
     this.audioContext = null;
-    this.tracks = []; // { id, name, file, buffer, startTrim, endTrim, canvas }
+    this.tracks = []; // { id, name, file, buffer, startTrim, endTrim, volume, type, muted }
     this.trackIdCounter = 0;
     this.isPlaying = false;
     this.currentSource = null;
     this.draggedTrack = null;
     this.playheadRAF = null;
     this.playingTrackId = null;
+    this.mixMode = 'sequence'; // 'sequence' or 'overlay'
     // Selection state
     this.selectionTrackId = null;
     this.selectionStart = null; // seconds
@@ -51,7 +53,9 @@ class AudioEditor {
     dropZone.addEventListener('drop', (e) => {
       e.preventDefault();
       dropZone.classList.remove('drag-over');
-      const files = Array.from(e.dataTransfer.files).filter(f => f.type.startsWith('audio/'));
+      const files = Array.from(e.dataTransfer.files).filter(f =>
+        f.type.startsWith('audio/') || f.type.startsWith('video/')
+      );
       this._addFiles(files);
     });
   }
@@ -59,27 +63,100 @@ class AudioEditor {
   async _addFiles(files) {
     for (const file of files) {
       try {
-        const arrayBuffer = await file.arrayBuffer();
-        const buffer = await this.audioContext.decodeAudioData(arrayBuffer);
+        const isVideo = file.type.startsWith('video/');
+        let buffer;
+
+        if (isVideo) {
+          // Extract audio from video using a hidden <video> element
+          buffer = await this._extractAudioFromVideo(file);
+        } else {
+          const arrayBuffer = await file.arrayBuffer();
+          buffer = await this.audioContext.decodeAudioData(arrayBuffer);
+        }
 
         const track = {
           id: this.trackIdCounter++,
           name: file.name.replace(/\.[^.]+$/, ''),
           file,
           buffer,
-          startTrim: 0,        // seconds from start to trim
-          endTrim: buffer.duration, // seconds from start where track ends
-          volume: 1.0
+          startTrim: 0,
+          endTrim: buffer.duration,
+          volume: 1.0,
+          muted: false,
+          type: isVideo ? 'video' : 'audio',
+          offset: 0 // start position in the mix (overlay mode), in seconds
         };
 
         this.tracks.push(track);
       } catch (err) {
         console.error(`Failed to decode ${file.name}:`, err);
+        this._toast(`Erreur: impossible de lire ${file.name}`);
       }
     }
 
     this._renderTimeline();
     this._updateControls();
+  }
+
+  // Extract audio track from a video file
+  async _extractAudioFromVideo(file) {
+    return new Promise((resolve, reject) => {
+      const video = document.createElement('video');
+      video.muted = true;
+      video.preload = 'auto';
+      const url = URL.createObjectURL(file);
+      video.src = url;
+
+      video.addEventListener('loadedmetadata', async () => {
+        try {
+          const duration = video.duration;
+          if (!isFinite(duration) || duration <= 0) {
+            throw new Error('Video duration invalid');
+          }
+
+          // Use MediaStreamDestination to capture audio
+          const source = this.audioContext.createMediaElementSource(video);
+          const dest = this.audioContext.createMediaStreamDestination();
+          source.connect(dest);
+          source.connect(this.audioContext.destination); // needed for playback to work
+
+          // Use OfflineAudioContext to render
+          // Fallback: decode the video file directly as audio
+          const arrayBuffer = await file.arrayBuffer();
+          const audioBuffer = await this.audioContext.decodeAudioData(arrayBuffer);
+
+          URL.revokeObjectURL(url);
+          video.remove();
+          resolve(audioBuffer);
+        } catch (e) {
+          // Fallback: try direct decode (many browsers can decode audio from video containers)
+          try {
+            const arrayBuffer = await file.arrayBuffer();
+            const audioBuffer = await this.audioContext.decodeAudioData(arrayBuffer);
+            URL.revokeObjectURL(url);
+            video.remove();
+            resolve(audioBuffer);
+          } catch (e2) {
+            URL.revokeObjectURL(url);
+            video.remove();
+            reject(new Error('Impossible d\'extraire l\'audio de cette video'));
+          }
+        }
+      });
+
+      video.addEventListener('error', () => {
+        // Try direct decode as fallback
+        file.arrayBuffer().then(ab => {
+          this.audioContext.decodeAudioData(ab).then(buf => {
+            URL.revokeObjectURL(url);
+            resolve(buf);
+          }).catch(() => {
+            URL.revokeObjectURL(url);
+            reject(new Error('Format video non supporte'));
+          });
+        });
+      });
+    });
   }
 
   // ─── Timeline Rendering ───
@@ -105,12 +182,24 @@ class AudioEditor {
       el.draggable = true;
 
       const duration = track.endTrim - track.startTrim;
+      const isStereo = track.buffer.numberOfChannels >= 2;
+      const typeBadge = track.type === 'video'
+        ? '<span class="track-type-badge video">VIDEO</span>'
+        : '<span class="track-type-badge audio">AUDIO</span>';
+      const volPct = Math.round((track.volume || 1) * 100);
+      const showOffset = this.mixMode === 'overlay';
 
       el.innerHTML = `
         <div class="track-handle" title="Glisse pour reordonner">&#9776;</div>
         <div class="track-info">
-          <div class="track-name">${index + 1}. ${track.name}</div>
+          <div class="track-name">${index + 1}. ${track.name} ${typeBadge}</div>
           <div class="track-duration">${this._formatTime(duration)} / ${this._formatTime(track.buffer.duration)}</div>
+          ${showOffset ? `
+            <div class="track-offset-row">
+              <label>Debut a</label>
+              <input type="text" class="track-offset-input" data-track="${track.id}" value="${this._formatTimeInput(track.offset)}" placeholder="0:00" title="Position de depart dans le mix (ex: 0:45)">
+            </div>
+          ` : ''}
         </div>
         <div class="track-waveform-container">
           <canvas class="track-waveform" width="400" height="60"></canvas>
@@ -119,6 +208,17 @@ class AudioEditor {
           <div class="track-region" data-track="${track.id}"></div>
           <div class="track-playhead" data-track="${track.id}"></div>
           <div class="track-selection" data-track="${track.id}"></div>
+        </div>
+        <div class="track-volume-row">
+          <span class="vol-icon" data-track="${track.id}" title="Mute/Unmute">${track.muted ? '&#128263;' : '&#128266;'}</span>
+          <input type="range" class="track-vol-slider" data-track="${track.id}" min="0" max="150" value="${volPct}" title="Volume: ${volPct}%">
+          <span class="vol-val" data-track="${track.id}">${volPct}%</span>
+        </div>
+        <div class="track-process">
+          ${isStereo ? `
+            <button class="btn btn-sm btn-outline track-isolate-btn" data-track="${track.id}" data-mode="center" title="Extraire le centre (voix/dialogue)">Voix</button>
+            <button class="btn btn-sm btn-outline track-isolate-btn" data-track="${track.id}" data-mode="sides" title="Retirer le centre (garder musique)">Musique</button>
+          ` : '<span style="font-size:0.7rem;color:var(--text-dim)">Mono</span>'}
         </div>
         <div class="track-actions">
           <button class="btn btn-sm btn-outline track-play-btn" data-track="${track.id}" title="Ecouter ce morceau">&#9654;</button>
@@ -149,6 +249,50 @@ class AudioEditor {
       // Events
       el.querySelector('.track-play-btn').addEventListener('click', () => this._playTrack(track, el));
       el.querySelector('.track-delete-btn').addEventListener('click', () => this._removeTrack(track.id));
+
+      // Volume slider
+      const volSlider = el.querySelector('.track-vol-slider');
+      const volVal = el.querySelector('.vol-val');
+      volSlider.addEventListener('input', () => {
+        track.volume = parseInt(volSlider.value) / 100;
+        volVal.textContent = volSlider.value + '%';
+      });
+
+      // Mute toggle
+      const muteIcon = el.querySelector('.vol-icon');
+      muteIcon.addEventListener('click', () => {
+        track.muted = !track.muted;
+        muteIcon.innerHTML = track.muted ? '&#128263;' : '&#128266;';
+        volSlider.style.opacity = track.muted ? '0.4' : '1';
+      });
+
+      // Offset input (overlay mode)
+      const offsetInput = el.querySelector('.track-offset-input');
+      if (offsetInput) {
+        offsetInput.addEventListener('change', () => {
+          track.offset = this._parseTimeInput(offsetInput.value);
+          offsetInput.value = this._formatTimeInput(track.offset);
+          this._updateTotalTime();
+        });
+        offsetInput.addEventListener('keydown', (e) => {
+          if (e.key === 'Enter') {
+            offsetInput.blur();
+          }
+        });
+      }
+
+      // Dialogue isolation buttons
+      el.querySelectorAll('.track-isolate-btn').forEach(btn => {
+        btn.addEventListener('click', () => {
+          const mode = btn.dataset.mode; // 'center' or 'sides'
+          this._isolateChannel(track, mode);
+          btn.classList.add('active-process');
+          // Remove active from sibling
+          el.querySelectorAll('.track-isolate-btn').forEach(b => {
+            if (b !== btn) b.classList.remove('active-process');
+          });
+        });
+      });
 
       // Selection events
       this._setupSelection(el, track);
@@ -319,7 +463,11 @@ class AudioEditor {
 
     const source = this.audioContext.createBufferSource();
     source.buffer = track.buffer;
-    source.connect(this.audioContext.destination);
+    // Apply volume via GainNode
+    const gainNode = this.audioContext.createGain();
+    gainNode.gain.value = track.muted ? 0 : (track.volume || 1.0);
+    source.connect(gainNode);
+    gainNode.connect(this.audioContext.destination);
     source.start(0, fromTime, remainingDuration);
     this.currentSource = source;
     this.isPlaying = true;
@@ -374,10 +522,87 @@ class AudioEditor {
     };
   }
 
+  // ─── Dialogue / Music Isolation (center channel extraction) ───
+  _isolateChannel(track, mode) {
+    if (track.buffer.numberOfChannels < 2) {
+      this._toast('Isolation impossible: piste mono');
+      return;
+    }
+
+    // Store original buffer for undo
+    if (!track._originalBuffer) {
+      track._originalBuffer = track.buffer;
+    }
+
+    const original = track._originalBuffer;
+    const left = original.getChannelData(0);
+    const right = original.getChannelData(1);
+    const length = original.length;
+    const sr = original.sampleRate;
+
+    if (mode === 'center') {
+      // Extract center channel (dialogue/vocals) = (L + R) / 2
+      // This keeps what's panned center and removes sides
+      const newBuffer = this.audioContext.createBuffer(1, length, sr);
+      const mono = newBuffer.getChannelData(0);
+      for (let i = 0; i < length; i++) {
+        mono[i] = (left[i] + right[i]) * 0.5;
+      }
+      track.buffer = newBuffer;
+      this._toast('Centre extrait (voix/dialogue)');
+    } else if (mode === 'sides') {
+      // Extract sides (music) = remove center, keep stereo difference
+      // L_new = L - (L+R)/2 = (L-R)/2
+      // R_new = R - (L+R)/2 = (R-L)/2
+      // This removes center-panned content (usually dialogue in films)
+      const newBuffer = this.audioContext.createBuffer(2, length, sr);
+      const newLeft = newBuffer.getChannelData(0);
+      const newRight = newBuffer.getChannelData(1);
+      for (let i = 0; i < length; i++) {
+        newLeft[i] = (left[i] - right[i]) * 0.5;
+        newRight[i] = (right[i] - left[i]) * 0.5;
+      }
+      track.buffer = newBuffer;
+      this._toast('Cotes extraits (musique de fond retiree)');
+    }
+
+    // Adjust endTrim if needed
+    track.endTrim = Math.min(track.endTrim, track.buffer.duration);
+    this._renderTimeline();
+    this._updateControls();
+  }
+
+  _toast(msg) {
+    let toast = document.querySelector('.toast');
+    if (!toast) {
+      toast = document.createElement('div');
+      toast.className = 'toast';
+      document.body.appendChild(toast);
+    }
+    toast.textContent = msg;
+    toast.classList.add('show');
+    setTimeout(() => toast.classList.remove('show'), 2500);
+  }
+
   // ─── Controls ───
   _setupControls() {
     document.getElementById('editorPlayAll').addEventListener('click', () => this._playAll());
     document.getElementById('editorStop').addEventListener('click', () => this._stopPlayback());
+
+    // Mix mode buttons
+    document.querySelectorAll('.mix-mode-btn').forEach(btn => {
+      btn.addEventListener('click', () => {
+        document.querySelectorAll('.mix-mode-btn').forEach(b => b.classList.remove('active'));
+        btn.classList.add('active');
+        this.mixMode = btn.dataset.mode;
+        // Show/hide sequence-specific controls
+        const seqControls = document.getElementById('sequenceControls');
+        if (seqControls) seqControls.style.display = this.mixMode === 'sequence' ? 'flex' : 'none';
+        // Re-render to show/hide offset inputs
+        this._renderTimeline();
+        this._updateTotalTime();
+      });
+    });
 
     // Range sliders
     ['crossfadeDuration', 'gapDuration', 'fadeIn', 'fadeOut'].forEach(id => {
@@ -408,12 +633,17 @@ class AudioEditor {
   }
 
   _updateTotalTime() {
-    const gap = parseFloat(document.getElementById('gapDuration').value) || 0;
     let total = 0;
-    this.tracks.forEach((t, i) => {
-      total += t.endTrim - t.startTrim;
-      if (i < this.tracks.length - 1) total += gap;
-    });
+    if (this.mixMode === 'overlay') {
+      // Overlay: total = max(offset + track duration)
+      total = Math.max(...this.tracks.map(t => (t.offset || 0) + (t.endTrim - t.startTrim)), 0);
+    } else {
+      const gap = parseFloat(document.getElementById('gapDuration').value) || 0;
+      this.tracks.forEach((t, i) => {
+        total += t.endTrim - t.startTrim;
+        if (i < this.tracks.length - 1) total += gap;
+      });
+    }
     document.getElementById('editorTotalTime').textContent = `Total: ${this._formatTime(total)}`;
   }
 
@@ -699,22 +929,39 @@ class AudioEditor {
   // ─── Merge Buffers ───
   async _mergeBuffers() {
     const sampleRate = this.audioContext.sampleRate;
-    const gap = parseFloat(document.getElementById('gapDuration').value) || 0;
-    const crossfade = parseFloat(document.getElementById('crossfadeDuration').value) || 0;
     const fadeInSec = parseFloat(document.getElementById('fadeIn').value) || 0;
     const fadeOutSec = parseFloat(document.getElementById('fadeOut').value) || 0;
 
-    // Calculate total length
+    // Filter out muted tracks
+    const activeTracks = this.tracks.filter(t => !t.muted);
+    if (activeTracks.length === 0) {
+      return this.audioContext.createBuffer(1, sampleRate, sampleRate); // 1s silence
+    }
+
+    const numChannels = Math.max(...activeTracks.map(t => t.buffer.numberOfChannels), 1);
+
+    if (this.mixMode === 'overlay') {
+      return this._mergeOverlay(activeTracks, sampleRate, numChannels, fadeInSec, fadeOutSec);
+    } else {
+      return this._mergeSequence(activeTracks, sampleRate, numChannels, fadeInSec, fadeOutSec);
+    }
+  }
+
+  // Sequence mode: tracks play one after another
+  _mergeSequence(activeTracks, sampleRate, numChannels, fadeInSec, fadeOutSec) {
+    const gap = parseFloat(document.getElementById('gapDuration').value) || 0;
+    const crossfade = parseFloat(document.getElementById('crossfadeDuration').value) || 0;
+
     let totalSamples = 0;
     const segments = [];
 
-    this.tracks.forEach((track, i) => {
+    activeTracks.forEach((track, i) => {
       const startSample = Math.floor(track.startTrim * sampleRate);
       const endSample = Math.floor(track.endTrim * sampleRate);
       const length = endSample - startSample;
       segments.push({ track, startSample, endSample, length });
       totalSamples += length;
-      if (i < this.tracks.length - 1) {
+      if (i < activeTracks.length - 1) {
         if (crossfade > 0) {
           totalSamples -= Math.floor(crossfade * sampleRate);
         } else {
@@ -724,7 +971,6 @@ class AudioEditor {
     });
 
     totalSamples = Math.max(totalSamples, 1);
-    const numChannels = Math.max(...this.tracks.map(t => t.buffer.numberOfChannels), 1);
     const outputBuffer = this.audioContext.createBuffer(numChannels, totalSamples, sampleRate);
 
     for (let ch = 0; ch < numChannels; ch++) {
@@ -753,25 +999,72 @@ class AudioEditor {
         }
       });
 
-      // Apply global fade-in
-      if (fadeInSec > 0) {
-        const fadeSamples = Math.floor(fadeInSec * sampleRate);
-        for (let i = 0; i < fadeSamples && i < totalSamples; i++) {
-          output[i] *= i / fadeSamples;
-        }
-      }
-
-      // Apply global fade-out
-      if (fadeOutSec > 0) {
-        const fadeSamples = Math.floor(fadeOutSec * sampleRate);
-        for (let i = 0; i < fadeSamples && i < totalSamples; i++) {
-          const idx = totalSamples - 1 - i;
-          output[idx] *= i / fadeSamples;
-        }
-      }
+      this._applyFades(output, totalSamples, sampleRate, fadeInSec, fadeOutSec);
     }
 
     return outputBuffer;
+  }
+
+  // Overlay mode: all tracks play simultaneously, with per-track offset
+  _mergeOverlay(activeTracks, sampleRate, numChannels, fadeInSec, fadeOutSec) {
+    // Total length = max(offset + track duration) across all tracks
+    let maxSamples = 0;
+    const segments = activeTracks.map(track => {
+      const offsetSamples = Math.floor((track.offset || 0) * sampleRate);
+      const startSample = Math.floor(track.startTrim * sampleRate);
+      const endSample = Math.floor(track.endTrim * sampleRate);
+      const length = endSample - startSample;
+      maxSamples = Math.max(maxSamples, offsetSamples + length);
+      return { track, startSample, endSample, length, offsetSamples };
+    });
+
+    maxSamples = Math.max(maxSamples, 1);
+    const outputBuffer = this.audioContext.createBuffer(numChannels, maxSamples, sampleRate);
+
+    for (let ch = 0; ch < numChannels; ch++) {
+      const output = outputBuffer.getChannelData(ch);
+
+      for (const seg of segments) {
+        const channelIdx = Math.min(ch, seg.track.buffer.numberOfChannels - 1);
+        const input = seg.track.buffer.getChannelData(channelIdx);
+        const volume = seg.track.volume || 1.0;
+
+        for (let j = 0; j < seg.length; j++) {
+          const writeIdx = seg.offsetSamples + j;
+          if (writeIdx >= maxSamples) break;
+          const srcIdx = seg.startSample + j;
+          if (srcIdx < input.length) {
+            output[writeIdx] += input[srcIdx] * volume;
+          }
+        }
+      }
+
+      // Soft clipping to prevent distortion when tracks overlap
+      for (let i = 0; i < maxSamples; i++) {
+        if (output[i] > 1) output[i] = 1 - Math.exp(-(output[i] - 1));
+        else if (output[i] < -1) output[i] = -(1 - Math.exp(-(-output[i] - 1)));
+      }
+
+      this._applyFades(output, maxSamples, sampleRate, fadeInSec, fadeOutSec);
+    }
+
+    return outputBuffer;
+  }
+
+  _applyFades(output, totalSamples, sampleRate, fadeInSec, fadeOutSec) {
+    if (fadeInSec > 0) {
+      const fadeSamples = Math.floor(fadeInSec * sampleRate);
+      for (let i = 0; i < fadeSamples && i < totalSamples; i++) {
+        output[i] *= i / fadeSamples;
+      }
+    }
+    if (fadeOutSec > 0) {
+      const fadeSamples = Math.floor(fadeOutSec * sampleRate);
+      for (let i = 0; i < fadeSamples && i < totalSamples; i++) {
+        const idx = totalSamples - 1 - i;
+        output[idx] *= i / fadeSamples;
+      }
+    }
   }
 
   // ─── Export ───
@@ -937,6 +1230,28 @@ class AudioEditor {
     const m = Math.floor(seconds / 60);
     const s = Math.floor(seconds % 60);
     return `${m}:${s.toString().padStart(2, '0')}`;
+  }
+
+  // Format seconds as m:ss for input fields
+  _formatTimeInput(seconds) {
+    const m = Math.floor(seconds / 60);
+    const s = Math.floor(seconds % 60);
+    return `${m}:${s.toString().padStart(2, '0')}`;
+  }
+
+  // Parse time string "m:ss" or "ss" into seconds
+  _parseTimeInput(str) {
+    str = (str || '').trim();
+    if (!str) return 0;
+    // Handle m:ss format
+    if (str.includes(':')) {
+      const parts = str.split(':');
+      const mins = parseInt(parts[0]) || 0;
+      const secs = parseInt(parts[1]) || 0;
+      return Math.max(0, mins * 60 + secs);
+    }
+    // Handle plain seconds
+    return Math.max(0, parseFloat(str) || 0);
   }
 }
 

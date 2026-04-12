@@ -210,44 +210,52 @@ class PromptStudio {
     const creative = (this.creativeInput?.value || '').trim();
     const lines = [];
 
-    // ── Detect mood/energy from analysis ──
+    // ── Detect mood/energy from ML analysis (moodProfile) or DSP fallback ──
     let moodTag = 'Intense';
+    let moodTag2 = '';
     let energyStart = 'Low';
     let energyPeak = 'High';
     let vibe = '';
     let bpm = 128;
+    let textureFromML = '';
 
     if (analysis) {
       bpm = analysis.bpm.bpm;
-      const chars = analysis.characteristics;
 
-      if (chars.darkness > 65) {
-        moodTag = 'Haunting';
-        vibe = 'dark, eerie';
-      } else if (chars.hypnotic > 65) {
-        moodTag = 'Introspective';
-        vibe = 'hypnotic, meditative';
-      } else if (chars.danceability > 70 && analysis.energy.normalized > 65) {
-        moodTag = 'Triumphant';
-        vibe = 'euphoric, driving';
-      } else if (analysis.energy.normalized < 40) {
-        moodTag = 'Melancholic';
-        vibe = 'atmospheric, floating';
-      } else {
-        moodTag = 'Intense';
-        vibe = 'powerful, dynamic';
-      }
+      // ── USE ML moodProfile if available (much more precise) ──
+      if (analysis.moodProfile) {
+        moodTag = analysis.moodProfile.primary;
+        moodTag2 = analysis.moodProfile.secondary || '';
+        energyStart = analysis.moodProfile.energyTag === 'High' ? 'Medium' :
+                      analysis.moodProfile.energyTag === 'Medium-High' ? 'Low-Medium' :
+                      analysis.moodProfile.energyTag === 'Medium' ? 'Low-Medium' : 'Low';
+        energyPeak = analysis.moodProfile.energyTag === 'Low' ? 'Medium' :
+                     analysis.moodProfile.energyTag === 'Low-Medium' ? 'Medium-High' : 'High';
+        textureFromML = analysis.moodProfile.textureTag || '';
 
-      // Energy curve
-      if (analysis.energy.normalized > 70) {
-        energyStart = 'Medium';
-        energyPeak = 'High';
-      } else if (analysis.energy.normalized > 45) {
-        energyStart = 'Low-Medium';
-        energyPeak = 'Medium-High';
+        // Build vibe from ML mood scores
+        const vibes = [];
+        if (analysis.mlMood) {
+          if (analysis.mlMood.aggressive > 30) vibes.push('intense');
+          if (analysis.mlMood.sad > 30) vibes.push('melancholic');
+          if (analysis.mlMood.happy > 30) vibes.push('uplifting');
+          if (analysis.mlMood.relaxed > 30) vibes.push('hypnotic');
+        }
+        if (analysis.characteristics.darkness > 55) vibes.push('dark');
+        if (analysis.characteristics.danceability > 65) vibes.push('groovy');
+        vibe = vibes.length ? vibes.slice(0, 3).join(', ') : 'powerful, dynamic';
       } else {
-        energyStart = 'Low';
-        energyPeak = 'Medium';
+        // DSP-only fallback
+        const chars = analysis.characteristics;
+        if (chars.darkness > 65) { moodTag = 'Haunting'; vibe = 'dark, eerie'; }
+        else if (chars.hypnotic > 65) { moodTag = 'Introspective'; vibe = 'hypnotic, meditative'; }
+        else if (chars.danceability > 70 && analysis.energy.normalized > 65) { moodTag = 'Triumphant'; vibe = 'euphoric, driving'; }
+        else if (analysis.energy.normalized < 40) { moodTag = 'Melancholic'; vibe = 'atmospheric, floating'; }
+        else { moodTag = 'Intense'; vibe = 'powerful, dynamic'; }
+
+        if (analysis.energy.normalized > 70) { energyStart = 'Medium'; energyPeak = 'High'; }
+        else if (analysis.energy.normalized > 45) { energyStart = 'Low-Medium'; energyPeak = 'Medium-High'; }
+        else { energyStart = 'Low'; energyPeak = 'Medium'; }
       }
     }
 
@@ -271,11 +279,13 @@ class PromptStudio {
     if (introInstr.length === 0) introInstr.push('Synth Pads', 'Soft Drums');
     if (dropInstr.length === 0) dropInstr.push('Drums (Heavy)', '808');
 
-    // ── Detect texture ──
-    let textureTag = '';
-    if (/vinyl|lo[\s-]?fi|tape/i.test(mergedPrompt)) textureTag = 'Vinyl Hiss';
-    else if (/warehouse|industrial|metal/i.test(mergedPrompt)) textureTag = 'Tape-Saturated';
-    else if (/ambient|cosmic|space/i.test(mergedPrompt)) textureTag = 'Lo-fi warmth';
+    // ── Detect texture (ML first, then prompt keywords) ──
+    let textureTag = textureFromML || '';
+    if (!textureTag) {
+      if (/vinyl|lo[\s-]?fi|tape/i.test(mergedPrompt)) textureTag = 'Vinyl Hiss';
+      else if (/warehouse|industrial|metal/i.test(mergedPrompt)) textureTag = 'Tape-Saturated';
+      else if (/ambient|cosmic|space/i.test(mergedPrompt)) textureTag = 'Lo-fi warmth';
+    }
 
     // ── Detect scene from creative text for narrative descriptions ──
     const translated = creative ? this._creativeToPomptFragment(creative) : '';
@@ -313,7 +323,8 @@ class PromptStudio {
     // ── BREAKDOWN ──
     lines.push(`[Break]`);
     lines.push(`[Energy: Low-Medium]`);
-    lines.push(`[Mood: ${moodTag === 'Triumphant' ? 'Introspective' : moodTag}]`);
+    const breakMood = moodTag2 && moodTag2 !== moodTag ? moodTag2 : (moodTag === 'Triumphant' ? 'Introspective' : moodTag);
+    lines.push(`[Mood: ${breakMood}]`);
     if (introInstr.length) lines.push(`[Instrument: ${introInstr[0]}]`);
     lines.push(`Stripped back. Breathing space, tension rebuilding.`);
     lines.push('');
@@ -321,9 +332,13 @@ class PromptStudio {
     // ── SECOND DROP ──
     lines.push(`[Drop]`);
     lines.push(`[Energy: High]`);
-    lines.push(`[Mood: Triumphant]`);
+    const peakMood = moodTag === 'Haunting' ? 'Intense' : (moodTag === 'Melancholic' ? 'Triumphant' : moodTag);
+    lines.push(`[Mood: ${peakMood}]`);
     if (dropInstr.length) lines.push(`[Instrument: ${dropInstr.slice(0, 3).join(', ')}]`);
-    lines.push(`Peak intensity, maximum impact. ${moodTag === 'Haunting' ? 'Relentless and dark.' : 'Euphoric release.'}`);
+    const peakDesc = moodTag === 'Haunting' ? 'Relentless and dark.' :
+                     moodTag === 'Melancholic' ? 'Bittersweet climax.' :
+                     moodTag === 'Chill But Focused' ? 'Controlled power.' : 'Euphoric release.';
+    lines.push(`Peak intensity, maximum impact. ${peakDesc}`);
     lines.push('');
 
     // ── OUTRO ──

@@ -549,6 +549,127 @@ header h1 { font-size: 2.5rem; font-weight: 700; letter-spacing: -0.02em; margin
   padding: 0.25rem 0.6rem;
 }
 
+/* Track volume slider */
+.track-volume-row {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  min-width: 100px;
+  flex-shrink: 0;
+}
+.track-volume-row .vol-icon {
+  font-size: 0.85rem;
+  color: var(--text-dim);
+  cursor: pointer;
+}
+.track-volume-row .vol-icon:hover { color: var(--accent); }
+.track-volume-row input[type="range"] {
+  width: 70px;
+  accent-color: var(--accent);
+  height: 4px;
+}
+.track-volume-row .vol-val {
+  font-family: var(--mono);
+  font-size: 0.72rem;
+  color: var(--text-dim);
+  min-width: 28px;
+  text-align: right;
+}
+
+/* Track audio process buttons */
+.track-process {
+  display: flex;
+  gap: 0.25rem;
+  flex-shrink: 0;
+}
+.track-process .btn {
+  font-size: 0.72rem;
+  padding: 0.2rem 0.45rem;
+  border-radius: 6px;
+  white-space: nowrap;
+}
+.track-process .btn.active-process {
+  background: var(--accent);
+  color: white;
+  border-color: var(--accent);
+}
+
+/* Track type badge */
+.track-type-badge {
+  display: inline-block;
+  font-size: 0.65rem;
+  padding: 0.1rem 0.35rem;
+  border-radius: 4px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+}
+.track-type-badge.audio { background: rgba(124,58,237,0.1); color: var(--accent); }
+.track-type-badge.video { background: rgba(225,29,72,0.1); color: var(--accent3); }
+
+/* Track offset input (overlay mode) */
+.track-offset-row {
+  display: flex;
+  align-items: center;
+  gap: 0.3rem;
+  margin-top: 0.25rem;
+}
+.track-offset-row label {
+  font-size: 0.7rem;
+  color: var(--text-dim);
+  white-space: nowrap;
+}
+.track-offset-input {
+  width: 50px;
+  padding: 0.15rem 0.3rem;
+  font-family: var(--mono);
+  font-size: 0.75rem;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  background: var(--bg);
+  color: var(--accent);
+  text-align: center;
+  outline: none;
+}
+.track-offset-input:focus {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 2px var(--accent-glow);
+}
+
+/* Mix mode toggle */
+.mix-mode-toggle {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  flex-wrap: wrap;
+}
+.mix-mode-label {
+  font-size: 0.82rem;
+  color: var(--text-dim);
+  font-weight: 500;
+}
+.mix-mode-btns {
+  display: flex;
+  gap: 0;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  overflow: hidden;
+}
+.mix-mode-btn {
+  border-radius: 0 !important;
+  border: none !important;
+  background: var(--bg-card);
+  color: var(--text-dim);
+  font-size: 0.8rem !important;
+  padding: 0.4rem 0.8rem !important;
+  transition: all 0.2s;
+}
+.mix-mode-btn:hover { background: var(--bg-card-hover); color: var(--text); }
+.mix-mode-btn.active {
+  background: var(--accent) !important;
+  color: white !important;
+}
+
 .track-actions { display: flex; gap: 0.35rem; flex-shrink: 0; }
 
 /* Editor Controls */
