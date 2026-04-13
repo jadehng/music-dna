@@ -52,21 +52,41 @@ exports.handler = async (event) => {
     };
   }
 
-  // Extract clip UUID
+  // Extract clip UUID — supports both full URLs and short links
+  let clipId;
   const uuidPattern = /[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/i;
-  const match = url.match(uuidPattern);
+  const uuidMatch = url.match(uuidPattern);
 
-  if (!match) {
+  if (uuidMatch) {
+    clipId = uuidMatch[0];
+  } else if (url.includes('suno.com/s/')) {
+    // Short URL — resolve redirect to get UUID
+    try {
+      const redirectUrl = await new Promise((resolve, reject) => {
+        https.get(url, { headers: { 'User-Agent': 'Mozilla/5.0' } }, (res) => {
+          if (res.headers.location) {
+            const locMatch = res.headers.location.match(uuidPattern);
+            if (locMatch) return resolve(locMatch[0]);
+          }
+          reject(new Error('Could not resolve short URL'));
+        }).on('error', reject);
+      });
+      clipId = redirectUrl;
+    } catch (e) {
+      return {
+        statusCode: 400,
+        body: JSON.stringify({ error: 'Could not resolve short Suno URL', hint: e.message })
+      };
+    }
+  } else {
     return {
       statusCode: 400,
       body: JSON.stringify({
         error: 'Invalid Suno URL',
-        hint: 'Colle un lien comme https://suno.com/song/da6d4a83-...'
+        hint: 'Colle un lien comme https://suno.com/song/... ou https://suno.com/s/...'
       })
     };
   }
-
-  const clipId = match[0];
 
   try {
     // Step 1: Get clip metadata from public API
