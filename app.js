@@ -134,7 +134,8 @@ async function handleSuno() {
     setLoadingText('Decodage audio...');
     const arrayBuffer = await response.arrayBuffer();
     const clipId = response.headers.get('X-Clip-Id') || match[0];
-    const title = `Suno - ${clipId.substring(0, 8)}`;
+    const rawTitle = response.headers.get('X-Song-Title');
+    const title = rawTitle ? decodeURIComponent(rawTitle) : `Suno - ${clipId.substring(0, 8)}`;
 
     // Store blob for download
     lastSunoBlob = new Blob([arrayBuffer], { type: 'audio/mpeg' });

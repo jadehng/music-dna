@@ -1,77 +1,45 @@
 /**
- * Suno audio extraction — downloads MP3 via CDN using curl.
- *
- * Key insight: Cloudflare blocks Node.js TLS fingerprint on Suno's CDN.
- * Must use curl subprocess (like youtube-audio.js uses yt-dlp).
- * Pattern: https://cdn1.suno.ai/{clipId}.mp3 with browser-like headers.
+ * Suno audio extraction — two-step process:
+ * 1. Call studio-api-prod.suno.com/api/clip/{id} to get the audio_url (public, no auth)
+ * 2. Download the MP3 from the CDN URL returned by the API
  */
 
-const { exec } = require('child_process');
-const { promisify } = require('util');
-const fs = require('fs');
-const os = require('os');
-const path = require('path');
-const crypto = require('crypto');
+const https = require('https');
 
-const execAsync = promisify(exec);
+function fetchJSON(url) {
+  return new Promise((resolve, reject) => {
+    https.get(url, { headers: { 'User-Agent': 'Mozilla/5.0' } }, (res) => {
+      let data = '';
+      res.on('data', chunk => data += chunk);
+      res.on('end', () => {
+        if (res.statusCode !== 200) return reject(new Error(`API returned ${res.statusCode}`));
+        try { resolve(JSON.parse(data)); }
+        catch (e) { reject(new Error('Invalid JSON from API')); }
+      });
+    }).on('error', reject);
+  });
+}
 
-const UA = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36';
-
-async function extractSunoAudio(clipId) {
-  const tmpFile = path.join(os.tmpdir(), `suno-${crypto.randomBytes(6).toString('hex')}.mp3`);
-
-  // Try cdn1 first, then cdn2
-  for (const cdn of ['cdn1.suno.ai', 'cdn2.suno.ai']) {
-    const url = `https://${cdn}/${clipId}.mp3`;
-
-    const cmd = [
-      'curl',
-      '--silent',
-      '--location',
-      '--max-redirs', '5',
-      '--max-time', '20',
-      '--fail',
-      '--compressed',
-      '--http2',
-      '-H', `"User-Agent: ${UA}"`,
-      '-H', '"Accept: audio/webm,audio/ogg,audio/wav,audio/*;q=0.9,*/*;q=0.8"',
-      '-H', '"Accept-Language: en-US,en;q=0.9"',
-      '-H', '"Origin: https://suno.com"',
-      '-H', '"Referer: https://suno.com/"',
-      '-H', '"sec-ch-ua: \\"Google Chrome\\";v=\\"131\\", \\"Chromium\\";v=\\"131\\""',
-      '-H', '"sec-ch-ua-mobile: ?0"',
-      '-H', '"sec-ch-ua-platform: \\"Windows\\""',
-      '-H', '"Sec-Fetch-Dest: empty"',
-      '-H', '"Sec-Fetch-Mode: cors"',
-      '-H', '"Sec-Fetch-Site: cross-site"',
-      '-o', `"${tmpFile}"`,
-      `"${url}"`
-    ].join(' ');
-
-    try {
-      await execAsync(cmd, { timeout: 25000 });
-
-      if (fs.existsSync(tmpFile)) {
-        const stat = fs.statSync(tmpFile);
-        if (stat.size > 1000) {
-          // Check it's actually audio, not XML error
-          const head = fs.readFileSync(tmpFile, { encoding: null, flag: 'r' }).slice(0, 10);
-          if (head[0] === 0x3C) {
-            // XML error response, try next CDN
-            fs.unlinkSync(tmpFile);
-            continue;
-          }
-          return { buffer: fs.readFileSync(tmpFile), cdn };
-        }
-        fs.unlinkSync(tmpFile);
+function downloadBuffer(url) {
+  return new Promise((resolve, reject) => {
+    https.get(url, {
+      headers: {
+        'User-Agent': 'Mozilla/5.0',
+        'Referer': 'https://suno.com/'
       }
-    } catch (e) {
-      try { fs.unlinkSync(tmpFile); } catch (_) {}
-      continue;
-    }
-  }
-
-  throw new Error('Audio not found on Suno CDN. Song may be private or deleted.');
+    }, (res) => {
+      // Follow redirects
+      if (res.statusCode >= 300 && res.statusCode < 400 && res.headers.location) {
+        return downloadBuffer(res.headers.location).then(resolve).catch(reject);
+      }
+      if (res.statusCode !== 200 && res.statusCode !== 206) {
+        return reject(new Error(`CDN returned ${res.statusCode}`));
+      }
+      const chunks = [];
+      res.on('data', chunk => chunks.push(chunk));
+      res.on('end', () => resolve(Buffer.concat(chunks)));
+    }).on('error', reject);
+  });
 }
 
 exports.handler = async (event) => {
@@ -84,7 +52,7 @@ exports.handler = async (event) => {
     };
   }
 
-  // Extract clip UUID from Suno URL
+  // Extract clip UUID
   const uuidPattern = /[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/i;
   const match = url.match(uuidPattern);
 
@@ -92,7 +60,7 @@ exports.handler = async (event) => {
     return {
       statusCode: 400,
       body: JSON.stringify({
-        error: 'Invalid Suno URL — could not find clip ID',
+        error: 'Invalid Suno URL',
         hint: 'Colle un lien comme https://suno.com/song/da6d4a83-...'
       })
     };
@@ -101,7 +69,24 @@ exports.handler = async (event) => {
   const clipId = match[0];
 
   try {
-    const { buffer } = await extractSunoAudio(clipId);
+    // Step 1: Get clip metadata from public API
+    const clipData = await fetchJSON(`https://studio-api-prod.suno.com/api/clip/${clipId}`);
+
+    if (!clipData.audio_url) {
+      return {
+        statusCode: 404,
+        body: JSON.stringify({
+          error: 'No audio URL found',
+          hint: 'Le morceau est peut-etre prive ou supprime.'
+        })
+      };
+    }
+
+    const title = clipData.title || `Suno - ${clipId.substring(0, 8)}`;
+    const audioUrl = clipData.audio_url;
+
+    // Step 2: Download the MP3 from CDN
+    const buffer = await downloadBuffer(audioUrl);
 
     // Cap at 10MB
     const capped = buffer.length > 10 * 1024 * 1024
@@ -113,8 +98,10 @@ exports.handler = async (event) => {
       headers: {
         'Content-Type': 'audio/mpeg',
         'X-Clip-Id': clipId,
+        'X-Song-Title': encodeURIComponent(title),
+        'X-Duration': String(clipData.metadata?.duration || 0),
         'Access-Control-Allow-Origin': '*',
-        'Access-Control-Expose-Headers': 'X-Clip-Id'
+        'Access-Control-Expose-Headers': 'X-Clip-Id, X-Song-Title, X-Duration'
       },
       body: capped.toString('base64'),
       isBase64Encoded: true
@@ -122,9 +109,9 @@ exports.handler = async (event) => {
   } catch (error) {
     console.error('Suno extraction error:', error.message);
     return {
-      statusCode: 404,
+      statusCode: 500,
       body: JSON.stringify({
-        error: error.message,
+        error: 'Extraction failed: ' + error.message,
         hint: 'Verifie que le lien est correct et que le morceau est public.'
       })
     };
