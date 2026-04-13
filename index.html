@@ -38,6 +38,7 @@
         <div class="tabs">
           <button class="tab active" data-tab="upload">Upload fichier</button>
           <button class="tab" data-tab="youtube">YouTube URL</button>
+          <button class="tab" data-tab="suno">Suno URL</button>
         </div>
 
         <div class="tab-content" id="tab-upload">
@@ -61,6 +62,15 @@
             <button class="btn btn-primary" id="analyzeYtBtn">Analyser</button>
           </div>
           <p class="hint">Colle un lien YouTube et on extrait l'audio automatiquement</p>
+        </div>
+
+        <div class="tab-content hidden" id="tab-suno">
+          <div class="youtube-input">
+            <input type="text" id="sunoUrl" placeholder="https://suno.com/song/..." />
+            <button class="btn btn-primary" id="analyzeSunoBtn">Extraire</button>
+            <button class="btn btn-outline" id="downloadSunoBtn" style="display:none">Telecharger MP3</button>
+          </div>
+          <p class="hint">Colle un lien Suno — on extrait le MP3 pour analyse ou telechargement direct</p>
         </div>
       </section>
 

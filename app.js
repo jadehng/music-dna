@@ -102,6 +102,68 @@ async function handleYouTube() {
   }
 }
 
+// ─── Suno Handler ───
+const sunoUrlInput = document.getElementById('sunoUrl');
+const analyzeSunoBtn = document.getElementById('analyzeSunoBtn');
+const downloadSunoBtn = document.getElementById('downloadSunoBtn');
+let lastSunoBlob = null;
+let lastSunoTitle = '';
+
+if (analyzeSunoBtn) {
+  analyzeSunoBtn.addEventListener('click', () => handleSuno());
+  sunoUrlInput.addEventListener('keydown', (e) => { if (e.key === 'Enter') handleSuno(); });
+}
+
+async function handleSuno() {
+  const url = sunoUrlInput.value.trim();
+  if (!url) return;
+
+  const uuidRegex = /[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/i;
+  const match = url.match(uuidRegex);
+  if (!match) { showToast('URL Suno invalide — colle un lien suno.com/song/...'); return; }
+
+  showLoading('Extraction audio Suno...');
+
+  try {
+    const response = await fetch(`/.netlify/functions/suno-audio?url=${encodeURIComponent(url)}`);
+    if (!response.ok) {
+      const err = await response.json().catch(() => ({}));
+      throw new Error(err.error || 'Erreur extraction Suno');
+    }
+
+    setLoadingText('Decodage audio...');
+    const arrayBuffer = await response.arrayBuffer();
+    const clipId = response.headers.get('X-Clip-Id') || match[0];
+    const title = `Suno - ${clipId.substring(0, 8)}`;
+
+    // Store blob for download
+    lastSunoBlob = new Blob([arrayBuffer], { type: 'audio/mpeg' });
+    lastSunoTitle = title;
+    if (downloadSunoBtn) downloadSunoBtn.style.display = 'inline-block';
+
+    setLoadingText('Analyse en cours...');
+    const result = await analyzer.analyzeArrayBuffer(arrayBuffer, title);
+    result.name = title;
+    analysisResults = [result];
+    displayResults();
+  } catch (error) {
+    console.error('Suno error:', error);
+    hideLoading();
+    showToast('Erreur: ' + error.message);
+  }
+}
+
+if (downloadSunoBtn) {
+  downloadSunoBtn.addEventListener('click', () => {
+    if (!lastSunoBlob) return;
+    const a = document.createElement('a');
+    a.href = URL.createObjectURL(lastSunoBlob);
+    a.download = `${lastSunoTitle}.mp3`;
+    a.click();
+    URL.revokeObjectURL(a.href);
+  });
+}
+
 // ─── Multi-File Handler ───
 async function handleFiles(files) {
   showLoading(`Analyse de ${files.length} fichier(s)...`);
