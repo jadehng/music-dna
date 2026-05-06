@@ -16,6 +16,7 @@ class PromptStudio {
     this.creativeInput = null;
     this.debounceTimer = null;
     this.injectedChips = [];
+    this._selectedTemplate = 'auto';
   }
 
   init() {
@@ -26,6 +27,7 @@ class PromptStudio {
     this._setupFusionButton();
     this._setupPromptTabs();
     this._setupCopyButtons();
+    this._setupStructureSection();
   }
 
   setAnalysisData(data) {
@@ -204,152 +206,285 @@ class PromptStudio {
    * + [Mood: X], [Energy: X], [Instrument: X], [Texture: X]
    * + Descriptive scene text per section
    */
-  _buildV5Lyrics(mergedPrompt) {
+
+  // ─── Structure section setup ───
+  _setupStructureSection() {
+    // Template button selection
+    document.querySelectorAll('.template-btn').forEach(btn => {
+      btn.addEventListener('click', () => {
+        document.querySelectorAll('.template-btn').forEach(b => b.classList.remove('active'));
+        btn.classList.add('active');
+        this._selectedTemplate = btn.dataset.template;
+      });
+    });
+
+    // Standalone "Generate Structure" button — regenerates lyrics without re-doing style prompt
+    document.getElementById('generateStructureBtn')?.addEventListener('click', () => {
+      const stylePrompt = document.getElementById('finalStylePrompt')?.textContent || '';
+      const mergedPrompt = stylePrompt.startsWith('Aucun') ? '' : stylePrompt;
+      this._buildV5Lyrics(mergedPrompt || document.getElementById('sunoPrompt')?.textContent || '');
+
+      // Make sure the final section is visible and scrolled to lyrics tab
+      const section = document.getElementById('finalPromptSection');
+      section?.classList.remove('hidden');
+      document.querySelectorAll('.prompt-tab').forEach(t => t.classList.remove('active'));
+      document.querySelectorAll('.prompt-output').forEach(c => c.classList.add('hidden'));
+      document.querySelector('.prompt-tab[data-ptab="lyrics"]')?.classList.add('active');
+      document.getElementById('ptab-lyrics')?.classList.remove('hidden');
+      section?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+    });
+  }
+
+  // ─── Build lyrics context from analysis + creative input ───
+  _buildLyricsContext(mergedPrompt) {
     const analysis = this.analysisData;
     const creative = (this.creativeInput?.value || '').trim();
-    const lines = [];
 
-    // ── Detect mood/energy from ML analysis (moodProfile) or DSP fallback ──
-    let moodTag = 'Intense';
-    let moodTag2 = '';
-    let energyStart = 'Low';
-    let energyPeak = 'High';
-    let vibe = '';
-    let bpm = 128;
-    let textureFromML = '';
+    let moodTag = 'Intense', secondMood = 'Introspective';
+    let energyStart = 'Low', energyPeak = 'High';
+    let vibe = 'powerful, dynamic';
+    let bpm = 128, textureTag = '';
 
     if (analysis) {
       bpm = analysis.bpm.bpm;
-
-      // ── USE ML moodProfile if available (much more precise) ──
       if (analysis.moodProfile) {
         moodTag = analysis.moodProfile.primary;
-        moodTag2 = analysis.moodProfile.secondary || '';
-        energyStart = analysis.moodProfile.energyTag === 'High' ? 'Medium' :
-                      analysis.moodProfile.energyTag === 'Medium-High' ? 'Low-Medium' :
-                      analysis.moodProfile.energyTag === 'Medium' ? 'Low-Medium' : 'Low';
-        energyPeak = analysis.moodProfile.energyTag === 'Low' ? 'Medium' :
-                     analysis.moodProfile.energyTag === 'Low-Medium' ? 'Medium-High' : 'High';
-        textureFromML = analysis.moodProfile.textureTag || '';
-
-        // Build vibe from ML mood scores
-        const vibes = [];
-        if (analysis.mlMood) {
-          if (analysis.mlMood.aggressive > 30) vibes.push('intense');
-          if (analysis.mlMood.sad > 30) vibes.push('melancholic');
-          if (analysis.mlMood.happy > 30) vibes.push('uplifting');
-          if (analysis.mlMood.relaxed > 30) vibes.push('hypnotic');
-        }
-        if (analysis.characteristics.darkness > 55) vibes.push('dark');
-        if (analysis.characteristics.danceability > 65) vibes.push('groovy');
-        vibe = vibes.length ? vibes.slice(0, 3).join(', ') : 'powerful, dynamic';
+        secondMood = analysis.moodProfile.secondary || 'Introspective';
+        const eTag = analysis.moodProfile.energyTag;
+        energyStart = (eTag === 'High' || eTag === 'Medium-High') ? 'Medium' : 'Low';
+        energyPeak = eTag === 'Low' ? 'Medium' : 'High';
+        textureTag = analysis.moodProfile.textureTag || '';
       } else {
-        // DSP-only fallback
         const chars = analysis.characteristics;
-        if (chars.darkness > 65) { moodTag = 'Haunting'; vibe = 'dark, eerie'; }
-        else if (chars.hypnotic > 65) { moodTag = 'Introspective'; vibe = 'hypnotic, meditative'; }
-        else if (chars.danceability > 70 && analysis.energy.normalized > 65) { moodTag = 'Triumphant'; vibe = 'euphoric, driving'; }
-        else if (analysis.energy.normalized < 40) { moodTag = 'Melancholic'; vibe = 'atmospheric, floating'; }
-        else { moodTag = 'Intense'; vibe = 'powerful, dynamic'; }
-
+        if (chars.darkness > 65) moodTag = 'Haunting';
+        else if (chars.hypnotic > 65) moodTag = 'Introspective';
+        else if (chars.danceability > 70) moodTag = 'Triumphant';
+        else if (analysis.energy.normalized < 40) moodTag = 'Melancholic';
         if (analysis.energy.normalized > 70) { energyStart = 'Medium'; energyPeak = 'High'; }
         else if (analysis.energy.normalized > 45) { energyStart = 'Low-Medium'; energyPeak = 'Medium-High'; }
-        else { energyStart = 'Low'; energyPeak = 'Medium'; }
       }
+      // Build vibe string
+      const vibes = [];
+      if (analysis.mlMood?.aggressive > 30) vibes.push('intense');
+      if (analysis.mlMood?.sad > 30) vibes.push('melancholic');
+      if (analysis.mlMood?.happy > 30) vibes.push('uplifting');
+      if (analysis.mlMood?.relaxed > 30) vibes.push('hypnotic');
+      if (analysis.characteristics?.darkness > 55) vibes.push('dark');
+      if (analysis.characteristics?.danceability > 65) vibes.push('groovy');
+      vibe = vibes.length ? vibes.slice(0, 3).join(', ') : 'powerful, dynamic';
     }
 
-    // ── Detect instruments from merged prompt ──
-    const introInstr = [];
-    const dropInstr = [];
-
+    // Instruments from merged prompt
+    const introInstr = [], dropInstr = [];
     if (/303|acid/i.test(mergedPrompt)) { introInstr.push('Acid 303'); dropInstr.push('Acid 303'); }
     if (/808|sub[\s-]?bass/i.test(mergedPrompt)) dropInstr.push('808');
     if (/pad|nappe|ethereal/i.test(mergedPrompt)) introInstr.push('Synth Pads');
     if (/kick|distort/i.test(mergedPrompt)) dropInstr.push('Drums (Heavy)');
-    if (/arpeg/i.test(mergedPrompt)) { introInstr.push('Arpeggiated Synth'); }
+    if (/arpeg/i.test(mergedPrompt)) introInstr.push('Arpeggiated Synth');
     if (/modular|synth/i.test(mergedPrompt)) dropInstr.push('Modular Synth');
-    if (/piano/i.test(mergedPrompt)) introInstr.push('Piano');
-    if (/guitar/i.test(mergedPrompt)) dropInstr.push('Electric Guitar (Distorted)');
-    if (/hi[\s-]?hat/i.test(mergedPrompt)) dropInstr.push('Hi-Hats');
     if (/drone/i.test(mergedPrompt)) introInstr.push('Drone Synth');
     if (/percussion|industrial/i.test(mergedPrompt)) dropInstr.push('Industrial Percussion');
-
-    // Defaults if nothing detected
-    if (introInstr.length === 0) introInstr.push('Synth Pads', 'Soft Drums');
+    if (/hi[\s-]?hat/i.test(mergedPrompt)) dropInstr.push('Hi-Hats');
+    if (introInstr.length === 0) introInstr.push('Synth Pads', 'Minimal Drums');
     if (dropInstr.length === 0) dropInstr.push('Drums (Heavy)', '808');
 
-    // ── Detect texture (ML first, then prompt keywords) ──
-    let textureTag = textureFromML || '';
+    // Texture fallback
     if (!textureTag) {
       if (/vinyl|lo[\s-]?fi|tape/i.test(mergedPrompt)) textureTag = 'Vinyl Hiss';
       else if (/warehouse|industrial|metal/i.test(mergedPrompt)) textureTag = 'Tape-Saturated';
       else if (/ambient|cosmic|space/i.test(mergedPrompt)) textureTag = 'Lo-fi warmth';
     }
 
-    // ── Detect scene from creative text for narrative descriptions ──
+    // Scene: take first meaningful phrase from creative input (translated)
     const translated = creative ? this._creativeToPomptFragment(creative) : '';
-    const sceneHint = translated.length > 15 ? translated.substring(0, 60) : vibe;
+    const scene = translated.length > 10
+      ? translated.split(/[.!]/)[0].trim().substring(0, 80)
+      : '';
 
-    // ═══════════════════════════════════════════
-    // BUILD SUNO v5 NARRATIVE BLUEPRINT
-    // ═══════════════════════════════════════════
-    lines.push('[Instrumental]');
-    lines.push('');
+    const peakDesc = {
+      'Haunting': 'Relentless and dark',
+      'Melancholic': 'Bittersweet climax',
+      'Chill But Focused': 'Controlled power',
+      'Triumphant': 'Cathartic release',
+      'Joyful': 'Euphoric peak',
+      'Introspective': 'Meditative peak',
+    }[moodTag] || 'Euphoric release';
 
-    // ── INTRO ──
-    lines.push(`[Intro]`);
-    lines.push(`[Mood: ${moodTag}]`);
-    lines.push(`[Energy: ${energyStart}]`);
-    if (introInstr.length) lines.push(`[Instrument: ${introInstr.slice(0, 2).join(', ')}]`);
-    if (textureTag) lines.push(`[Texture: ${textureTag}]`);
-    lines.push(`Ambient opening, ${sceneHint || 'setting the scene'}. Faint elements slowly fade in.`);
-    lines.push('');
+    return {
+      bpm, moodTag, secondMood, energyStart, energyPeak,
+      vibe, scene, textureTag, peakDesc,
+      introInstrs: introInstr.slice(0, 2).join(', '),
+      dropInstrs: dropInstr.slice(0, 3).join(', '),
+    };
+  }
 
-    // ── BUILD ──
-    lines.push(`[Pre-Chorus]`);
-    lines.push(`[Energy: ${energyStart === 'Low' ? 'Low-Medium' : 'Medium'}]`);
-    lines.push(`Beat builds with layered elements, rhythmic hi-hats at ${bpm} BPM.`);
-    lines.push('');
+  // ─── Auto-detect template from analysis + structure text ───
+  _detectTemplate(analysis, structureText) {
+    const st = (structureText || '').toLowerCase();
 
-    // ── DROP / PEAK ──
-    lines.push(`[Drop]`);
-    lines.push(`[Energy: ${energyPeak}]`);
-    lines.push(`[Mood: ${moodTag === 'Haunting' ? 'Intense' : moodTag}]`);
-    if (dropInstr.length) lines.push(`[Instrument: ${dropInstr.slice(0, 3).join(', ')}]`);
-    lines.push(`Full intensity, ${vibe || 'driving groove'}. All elements hit.`);
-    lines.push('');
+    // User explicitly specified a structure pattern
+    if (/\b(2|two|3|three)\s*(drops?|peaks?)/i.test(st) || /\bjourney\b/i.test(st)) return 'journey';
+    if (/\bprogress\w*\b|\blayers?\b|\bgradual\b/i.test(st)) return 'progressive';
+    if (/\bminimal\b|\bhypno\w*\b|\bno\s*drop\b|\bgroove\b/i.test(st)) return 'minimal';
+    if (/\banthems?\b|\bchorus\b|\bverse\b|\bhook\b/i.test(st)) return 'anthem';
+    if (/\bclassic\b|\bone\s*drop\b|\bsingle\s*drop\b/i.test(st)) return 'classic-drop';
 
-    // ── BREAKDOWN ──
-    lines.push(`[Break]`);
-    lines.push(`[Energy: Low-Medium]`);
-    const breakMood = moodTag2 && moodTag2 !== moodTag ? moodTag2 : (moodTag === 'Triumphant' ? 'Introspective' : moodTag);
-    lines.push(`[Mood: ${breakMood}]`);
-    if (introInstr.length) lines.push(`[Instrument: ${introInstr[0]}]`);
-    lines.push(`Stripped back. Breathing space, tension rebuilding.`);
-    lines.push('');
+    // Auto-detect from analysis data
+    if (!analysis) return 'classic-drop';
+    const { bpm, characteristics, energy } = analysis;
 
-    // ── SECOND DROP ──
-    lines.push(`[Drop]`);
-    lines.push(`[Energy: High]`);
-    const peakMood = moodTag === 'Haunting' ? 'Intense' : (moodTag === 'Melancholic' ? 'Triumphant' : moodTag);
-    lines.push(`[Mood: ${peakMood}]`);
-    if (dropInstr.length) lines.push(`[Instrument: ${dropInstr.slice(0, 3).join(', ')}]`);
-    const peakDesc = moodTag === 'Haunting' ? 'Relentless and dark.' :
-                     moodTag === 'Melancholic' ? 'Bittersweet climax.' :
-                     moodTag === 'Chill But Focused' ? 'Controlled power.' : 'Euphoric release.';
-    lines.push(`Peak intensity, maximum impact. ${peakDesc}`);
-    lines.push('');
+    if (characteristics.hypnotic > 65 && bpm.bpm < 130) return 'minimal';
+    if (energy.normalized > 70 && bpm.bpm > 130 && characteristics.darkness > 55) return 'journey';
+    if (characteristics.complexity > 60 && energy.normalized < 65) return 'progressive';
+    return 'classic-drop';
+  }
 
-    // ── OUTRO ──
-    lines.push(`[Outro]`);
-    lines.push(`[Energy: Low]`);
-    lines.push(`[Fade Out]`);
-    if (introInstr.length) lines.push(`[Instrument: ${introInstr[0]}]`);
-    lines.push(`Elements removing one by one. Echoing into silence.`);
-    lines.push('');
+  // ─── Render a list of section objects → Suno lyrics string ───
+  _renderSections(sections) {
+    const lines = ['[Instrumental]', ''];
+    for (const s of sections) {
+      lines.push(s.tag);
+      if (s.energy)   lines.push(`[Energy: ${s.energy}]`);
+      if (s.mood)     lines.push(`[Mood: ${s.mood}]`);
+      if (s.instrs)   lines.push(`[Instrument: ${s.instrs}]`);
+      if (s.texture)  lines.push(`[Texture: ${s.texture}]`);
+      if (s.extras)   s.extras.forEach(e => lines.push(e));
+      lines.push(s.desc);
+      lines.push('');
+    }
     lines.push('[End]');
+    return lines.join('\n');
+  }
 
-    document.getElementById('finalLyricsPrompt').textContent = lines.join('\n');
+  // ─── Template definitions ───
+  _getTemplateSections(name, c) {
+    const templates = {
+
+      'classic-drop': [
+        { tag: '[Intro]',      energy: c.energyStart,   mood: c.moodTag,    instrs: c.introInstrs, texture: c.textureTag,
+          desc: `${c.scene || 'Atmospheric opening'}. ${c.vibe.split(',')[0]} energy. Faint elements emerge from silence.` },
+        { tag: '[Build]',      energy: 'Low-Medium',    mood: null,         instrs: null,           texture: null,
+          desc: `Tension rising at ${c.bpm} BPM. Rhythmic layers stacking. Energy accumulating.` },
+        { tag: '[Drop]',       energy: c.energyPeak,    mood: c.moodTag,    instrs: c.dropInstrs,  texture: null,
+          desc: `Full impact. ${c.vibe}. All elements detonate simultaneously.` },
+        { tag: '[Break]',      energy: 'Low-Medium',    mood: c.secondMood, instrs: c.introInstrs, texture: c.textureTag,
+          desc: `Stripped back. ${c.scene ? c.scene.split(',')[0] : 'Breathing space'}. Tension rebuilding under the surface.` },
+        { tag: '[Drop]',       energy: 'High',          mood: c.moodTag,    instrs: c.dropInstrs,  texture: null,
+          desc: `Second peak. ${c.peakDesc}. Maximum intensity, no mercy.` },
+        { tag: '[Outro]',      energy: 'Low',           mood: null,         instrs: c.introInstrs, texture: c.textureTag,
+          extras: ['[Fade Out]'],
+          desc: `Elements dissolving one by one. ${c.scene ? c.scene.split(',')[0] : 'Fading into the night'}. Echo into silence.` },
+      ],
+
+      'journey': [
+        { tag: '[Intro]',      energy: 'Low',           mood: c.moodTag,    instrs: c.introInstrs, texture: c.textureTag,
+          desc: `${c.scene || 'Long atmospheric opening'}. Barely audible. Just a pulse in the dark.` },
+        { tag: '[Build]',      energy: 'Low-Medium',    mood: null,         instrs: c.introInstrs, texture: null,
+          desc: `First layer adds. The groove takes shape at ${c.bpm} BPM. Something awakening.` },
+        { tag: '[Drop]',       energy: 'Medium-High',   mood: c.moodTag,    instrs: c.dropInstrs,  texture: null,
+          desc: `First drop — not yet full power. ${c.vibe}. A taste of what's coming.` },
+        { tag: '[Interlude]',  energy: 'Low',           mood: c.secondMood, instrs: c.introInstrs, texture: c.textureTag,
+          desc: `Brief reset. ${c.scene || 'The room breathes'}. Calm before the second wave.` },
+        { tag: '[Build]',      energy: 'Medium-High',   mood: null,         instrs: null,           texture: null,
+          desc: `Harder rebuild. More elements, faster. The tension is almost unbearable.` },
+        { tag: '[Drop]',       energy: 'High',          mood: c.moodTag,    instrs: c.dropInstrs,  texture: null,
+          desc: `Second drop — more intense. ${c.vibe}. Full devastation.` },
+        { tag: '[Break]',      energy: 'Low-Medium',    mood: c.secondMood, instrs: c.introInstrs, texture: c.textureTag,
+          desc: `Breakdown. ${c.scene || 'Reflection in the silence'}. Everything stripped to essence.` },
+        { tag: '[Drop]',       energy: 'High',          mood: c.moodTag,    instrs: c.dropInstrs,  texture: null,
+          desc: `Final peak. ${c.peakDesc}. The highest point — everything at once.` },
+        { tag: '[Outro]',      energy: 'Low',           mood: null,         instrs: c.introInstrs, texture: c.textureTag,
+          extras: ['[Fade Out]'],
+          desc: `Long fade. ${c.scene ? c.scene.split(',')[0] : 'The night dissolves'}. Last echo trails into nothing.` },
+      ],
+
+      'progressive': [
+        { tag: '[Intro]',      energy: 'Low',           mood: c.moodTag,    instrs: c.introInstrs.split(',')[0]?.trim(), texture: c.textureTag,
+          desc: `${c.scene || 'Bare opening'}. Minimal — just the foundation, nothing more.` },
+        { tag: '[Verse]',      energy: 'Low-Medium',    mood: null,         instrs: c.introInstrs, texture: null,
+          desc: `First layer added. The groove takes shape. ${c.bpm} BPM emerging clearly.` },
+        { tag: '[Verse]',      energy: 'Medium',        mood: null,         instrs: c.introInstrs, texture: null,
+          desc: `Second layer. Texture thickening. ${c.vibe} starting to assert itself.` },
+        { tag: '[Pre-Chorus]', energy: 'Medium-High',   mood: c.moodTag,    instrs: c.dropInstrs,  texture: null,
+          desc: `All building blocks in place. ${c.vibe}. The dam about to break.` },
+        { tag: '[Chorus]',     energy: c.energyPeak,    mood: c.moodTag,    instrs: c.dropInstrs,  texture: null,
+          desc: `Everything together. The full picture revealed. ${c.peakDesc}.` },
+        { tag: '[Break]',      energy: 'Low-Medium',    mood: c.secondMood, instrs: c.introInstrs, texture: c.textureTag,
+          desc: `Strip back to essentials. ${c.scene || 'The groove persists'}. Breathe.` },
+        { tag: '[Outro]',      energy: 'Low',           mood: null,         instrs: c.introInstrs, texture: c.textureTag,
+          extras: ['[Fade Out]'],
+          desc: `Progressive fade. Elements leave one by one. Last to go: the pulse itself.` },
+      ],
+
+      'minimal': [
+        { tag: '[Intro]',      energy: 'Low',           mood: c.moodTag,    instrs: c.introInstrs.split(',')[0]?.trim(), texture: c.textureTag,
+          desc: `${c.scene || 'Absolute silence, then'}. Just a click. Just a tone. Nothing more.` },
+        { tag: '[Groove]',     energy: 'Low-Medium',    mood: null,         instrs: c.introInstrs, texture: null,
+          desc: `The kick enters. Sparse. Breathing. ${c.bpm} BPM — hypnotic repetition begins.` },
+        { tag: '[Evolution]',  energy: 'Medium',        mood: c.moodTag,    instrs: c.introInstrs, texture: null,
+          desc: `Micro-variations. Nothing dramatic — everything is subtle. ${c.vibe} beneath the surface.` },
+        { tag: '[Peak]',       energy: 'Medium-High',   mood: c.moodTag,    instrs: c.dropInstrs,  texture: null,
+          desc: `The peak — not a drop, a revelation. ${c.peakDesc}. Still minimal, but at full power.` },
+        { tag: '[Groove]',     energy: 'Medium',        mood: c.secondMood, instrs: c.introInstrs, texture: c.textureTag,
+          desc: `Return to the groove. The loop is the journey. Hypnotic and relentless.` },
+        { tag: '[Outro]',      energy: 'Low',           mood: null,         instrs: c.introInstrs, texture: c.textureTag,
+          extras: ['[Fade Out]'],
+          desc: `Minimal to the end. Elements disappearing like thoughts. The pulse is last.` },
+      ],
+
+      'anthem': [
+        { tag: '[Intro]',       energy: 'Low',          mood: c.moodTag,    instrs: c.introInstrs, texture: c.textureTag,
+          desc: `${c.scene || 'Opening'}. Setting the emotional tone before the story begins.` },
+        { tag: '[Verse]',       energy: 'Low-Medium',   mood: null,         instrs: c.introInstrs, texture: null,
+          desc: `The story begins. ${c.vibe.split(',')[0]} feel. Scene established.` },
+        { tag: '[Pre-Chorus]',  energy: 'Medium',       mood: null,         instrs: c.introInstrs, texture: null,
+          desc: `Energy climbing. Leading into the moment. Anticipation builds.` },
+        { tag: '[Chorus]',      energy: c.energyPeak,   mood: c.moodTag,    instrs: c.dropInstrs,  texture: null,
+          desc: `The anthemic moment. ${c.peakDesc}. Full emotional impact.` },
+        { tag: '[Verse]',       energy: 'Medium',       mood: null,         instrs: c.introInstrs, texture: null,
+          desc: `Second chapter. ${c.vibe}. Deeper, more complex than the first.` },
+        { tag: '[Pre-Chorus]',  energy: 'Medium-High',  mood: null,         instrs: c.introInstrs, texture: null,
+          desc: `Rising again. Even more powerful than the first time.` },
+        { tag: '[Chorus]',      energy: 'High',         mood: c.moodTag,    instrs: c.dropInstrs,  texture: null,
+          desc: `Second chorus hits harder. ${c.peakDesc}. Cathartic.` },
+        { tag: '[Bridge]',      energy: 'Medium',       mood: c.secondMood, instrs: c.introInstrs, texture: c.textureTag,
+          desc: `The bridge — unexpected, emotional. ${c.scene || 'A moment of clarity'}.` },
+        { tag: '[Final Chorus]',energy: 'High',         mood: c.moodTag,    instrs: c.dropInstrs,  texture: null,
+          desc: `Ultimate peak. Everything together. The definitive statement. ${c.peakDesc}.` },
+        { tag: '[Outro]',       energy: 'Low',          mood: null,         instrs: c.introInstrs, texture: c.textureTag,
+          extras: ['[Fade Out]'],
+          desc: `Resolution. ${c.scene ? c.scene.split(',')[0] : 'Peace after the storm'}. The echo of what was.` },
+      ],
+    };
+
+    return templates[name] || templates['classic-drop'];
+  }
+
+  // ─── Main entry point for lyrics generation ───
+  _buildV5Lyrics(mergedPrompt) {
+    const ctx = this._buildLyricsContext(mergedPrompt);
+    const structureText = (document.getElementById('structureInput')?.value || '').trim();
+
+    // Determine template: manual selection or auto-detect
+    const templateName = this._selectedTemplate === 'auto'
+      ? this._detectTemplate(this.analysisData, structureText)
+      : this._selectedTemplate;
+
+    // Update the badge in the UI
+    const labels = {
+      'classic-drop': 'Classic Drop',
+      'journey':      'Journey (2-3 drops)',
+      'progressive':  'Progressive',
+      'minimal':      'Minimal / Hypnotic',
+      'anthem':       'Anthem',
+    };
+    const detectedEl = document.getElementById('templateDetected');
+    if (detectedEl) {
+      detectedEl.textContent = labels[templateName] + (this._selectedTemplate === 'auto' ? ' · auto' : '');
+    }
+
+    const sections = this._getTemplateSections(templateName, ctx);
+    document.getElementById('finalLyricsPrompt').textContent = this._renderSections(sections);
   }
 
   // ─── Prompt tabs ───

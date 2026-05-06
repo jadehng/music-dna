@@ -298,6 +298,28 @@
           <div class="prompt-box" id="studioPromptPreview">Ecris ta vision ci-dessus ou clique des inspirations...</div>
         </div>
 
+        <!-- ═══ STRUCTURE STUDIO ═══ -->
+        <div class="structure-card" id="structureCard">
+          <div class="structure-card-header">
+            <h3>Structure Lyrics</h3>
+            <span class="template-badge" id="templateDetected">Auto</span>
+          </div>
+          <p class="studio-hint">Template auto-detecte depuis l'analyse. Choisis manuellement ou decris ta structure en langage naturel.</p>
+
+          <div class="template-selector">
+            <button class="template-btn active" data-template="auto">Auto</button>
+            <button class="template-btn" data-template="classic-drop">Classic Drop</button>
+            <button class="template-btn" data-template="journey">Journey (2-3 drops)</button>
+            <button class="template-btn" data-template="progressive">Progressive</button>
+            <button class="template-btn" data-template="minimal">Minimal</button>
+            <button class="template-btn" data-template="anthem">Anthem</button>
+          </div>
+
+          <textarea id="structureInput" rows="2" placeholder="Ex: long intro 30sec, first drop brutal, breakdown industrial, second drop harder, fade out..."></textarea>
+
+          <button class="btn btn-outline" id="generateStructureBtn">Generate Structure</button>
+        </div>
+
         <!-- ═══ FUSION BUTTON ═══ -->
         <div class="fusion-cta">
           <div class="fusion-arrow">1 + 2 =</div>
