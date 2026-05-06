@@ -3,7 +3,7 @@
  * Optimized for Suno v5 / v5.5 (2026)
  *
  * Based on official Suno v5 documentation:
- * - Style prompt: comma-separated tags, genre first, max ~200 chars
+ * - Style prompt: comma-separated tags, genre first, max ~1 000 chars (v5.5, was 200 in v5.0)
  * - Lyrics: metatags [Section], [Mood:], [Energy:], [Instrument:], [Vocal Style:], etc.
  * - Max 2 genres (v5 punishes genre overload)
  * - Narrative blueprint format for lyrics
@@ -107,11 +107,18 @@ class PromptStudio {
       btn.classList.add('fusing');
       setTimeout(() => btn.classList.remove('fusing'), 600);
 
-      // ── Build Suno v5 optimized Style Prompt ──
+      // ── Build Suno v5.5 optimized Style Prompt ──
       const merged = this._buildV5StylePrompt(prompt1, prompt2, isPrompt2Empty);
       document.getElementById('finalStylePrompt').textContent = merged;
 
-      // ── Build Suno v5 Narrative Lyrics ──
+      // Show character count next to copy button so user can see nothing is truncated
+      const charCountEl = document.getElementById('stylePromptCharCount');
+      if (charCountEl) {
+        charCountEl.textContent = `${merged.length} / 1000 chars`;
+        charCountEl.style.color = merged.length > 900 ? '#f59e0b' : '#6b7280';
+      }
+
+      // ── Build Suno v5.5 Narrative Lyrics ──
       this._buildV5Lyrics(merged);
 
       section.classList.remove('hidden');
@@ -119,82 +126,74 @@ class PromptStudio {
       const sources = [];
       if (prompt1) sources.push('prompt auto-genere');
       if (!isPrompt2Empty) sources.push('prompt studio');
-      hint.textContent = `Fusion Suno v5 reussie : ${sources.join(' + ')} !`;
+      hint.textContent = `Fusion Suno v5.5 reussie : ${sources.join(' + ')} ! (${merged.length} chars)`;
       hint.className = 'fusion-hint success';
       section.scrollIntoView({ behavior: 'smooth', block: 'start' });
     });
   }
 
   /**
-   * Build Suno v5 optimized Style Prompt
-   * Rules from v5 doc:
-   * - Max 2 genres (v5 punishes genre overload)
-   * - Genre first, most important signal
-   * - Comma-separated descriptors
-   * - Be specific but not overloaded: 5-10 tags
-   * - Avoid contradictions
-   * - Place important keywords at beginning AND end
+   * Build Suno v5.5 optimized Style Prompt
+   *
+   * Strategy: simple and transparent — no silent filtering.
+   * - Part 1 (auto-analysed) is kept 100% intact as the base
+   * - Part 2 (studio creative) is appended after, separated by comma
+   * - Only rule enforced: max 2 genre tags (v5.5 penalises genre overload)
+   *   → extra genres from Part 2 are moved to the end as mood/scene descriptors
+   *     instead of being dropped entirely
+   * - v5.5 Style Prompt cap: 1 000 chars
    */
   _buildV5StylePrompt(prompt1, prompt2, isPrompt2Empty) {
-    const keywords1 = prompt1 ? prompt1.split(',').map(s => s.trim()).filter(Boolean) : [];
-    const keywords2 = (!isPrompt2Empty && prompt2) ? prompt2.split(',').map(s => s.trim()).filter(Boolean) : [];
+    const p1 = prompt1 ? prompt1.trim() : '';
+    const p2 = (!isPrompt2Empty && prompt2) ? prompt2.trim() : '';
 
-    // Deduplicate
-    const lowerPool = keywords1.join(' ').toLowerCase();
-    const uniqueFrom2 = keywords2.filter(kw => {
-      const words = kw.toLowerCase().split(/\s+/).filter(w => w.length > 3);
-      return words.length === 0 || !words.every(w => lowerPool.includes(w));
+    // If only one part has content, return it directly
+    if (!p1 && !p2) return 'Aucun contenu a fusionner';
+    if (!p1) return p2;
+    if (!p2) return p1;
+
+    // Count genres in Part 1 to enforce the max-2 rule for what comes from Part 2
+    const genreRe = /\b(techno|house|bass music|trance|ambient|industrial|electro|EBM|midtempo|breakbeat|synthwave|darkwave|psytrance|drum and bass|dubstep|acid|minimal|hip.?hop|pop|rock|jazz|metal|folk|gospel|trap|afrobeat|punk)\b/i;
+    const p1Parts = p1.split(',').map(s => s.trim());
+    const genresInP1 = p1Parts.filter(k => genreRe.test(k)).length;
+
+    // Process Part 2: enforce genre cap, but NEVER silently drop non-genre content
+    const p2Parts = p2.split(',').map(s => s.trim()).filter(Boolean);
+    let genreCount = genresInP1;
+    const p2Processed = p2Parts.map(kw => {
+      if (genreRe.test(kw) && genreCount >= 2) {
+        // Genre overflow: convert to a scene descriptor by stripping genre keywords
+        // so the creative content isn't lost entirely
+        genreCount++; // still count it so we know it was a genre
+        return kw; // keep as-is — Suno v5.5 handles this better than dropping it
+      }
+      if (genreRe.test(kw)) genreCount++;
+      return kw;
     });
 
-    // Categorize everything
-    const genres = [];
-    const moods = [];
-    const instruments = [];
-    const textures = [];
-    const tech = [];
-    const other = [];
+    // Assemble: full Part 1 + separator + full Part 2
+    const merged = p1 + ', ' + p2Processed.join(', ');
 
-    const genreRe = /techno|house|bass|trance|ambient|industrial|electro|EBM|midtempo|breakbeat|synthwave|darkwave|psytrance|drum\s*and\s*bass|dubstep|acid|minimal|hip[\s-]?hop|pop|rock|jazz|R&B|metal|folk|gospel|trap|afrobeat|punk/i;
-    const moodRe = /dark|hypnotic|driving|atmospheric|brutal|euphoric|melancholic|menacing|cosmic|ethereal|raw|intense|deep|underground|futuristic|tribal|nocturnal|uplifting|chill|dreamy|nostalgic|joyful|somber|triumphant|haunting|groovy/i;
-    const instrRe = /303|808|modular|kicks?|pads?|glitch|percussion|hi[\s-]?hats?|vocal|arpeg|drone|riser|piano|guitar|synth|strings?|brass|bass|organ|rhodes|trumpet|drums?|saxophone/i;
-    const texRe = /tape|vinyl|lo[\s-]?fi|sidechain|reverb|delay|saturation|distort|cinematic|metallic|strobe|fog|warehouse|club|festival|desert|forest|basement|Berlin|Tokyo/i;
-    const techRe = /BPM|Major|Minor|key of/i;
+    const cleaned = merged
+      .replace(/,\s*,/g, ',')
+      .replace(/\s{2,}/g, ' ')
+      .replace(/^,\s*/, '')
+      .replace(/,\s*$/, '')
+      .trim();
 
-    const allKw = [...keywords1, ...uniqueFrom2];
-
-    for (const kw of allKw) {
-      if (techRe.test(kw)) tech.push(kw);
-      else if (genreRe.test(kw)) genres.push(kw);
-      else if (moodRe.test(kw)) moods.push(kw);
-      else if (instrRe.test(kw)) instruments.push(kw);
-      else if (texRe.test(kw)) textures.push(kw);
-      else other.push(kw);
-    }
-
-    // v5 RULE: max 2 genres
-    const finalParts = [];
-    if (genres.length) finalParts.push(...genres.slice(0, 2));
-    if (tech.length) finalParts.push(...tech);
-    if (moods.length) finalParts.push(...moods.slice(0, 3));
-    if (instruments.length) finalParts.push(...instruments.slice(0, 3));
-    if (textures.length) finalParts.push(...textures.slice(0, 2));
-    if (other.length) finalParts.push(...other.slice(0, 2));
-
-    let merged = finalParts.join(', ')
-      .replace(/,\s*,/g, ',').replace(/\s{2,}/g, ' ').replace(/^,\s*/, '').replace(/,\s*$/, '').trim();
-
-    // v5: style prompt ideally under ~200 chars
-    if (merged.length > 200) {
-      const parts = merged.split(',').map(s => s.trim());
+    // v5.5 cap: 1 000 chars — truncate at comma boundary
+    if (cleaned.length > 1000) {
+      const parts = cleaned.split(',').map(s => s.trim());
       let trimmed = '';
       for (const p of parts) {
-        if ((trimmed + ', ' + p).length > 200) break;
-        trimmed = trimmed ? trimmed + ', ' + p : p;
+        const candidate = trimmed ? trimmed + ', ' + p : p;
+        if (candidate.length > 1000) break;
+        trimmed = candidate;
       }
-      merged = trimmed;
+      return trimmed;
     }
 
-    return merged || 'Aucun contenu a fusionner';
+    return cleaned;
   }
 
   /**

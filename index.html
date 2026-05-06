@@ -325,7 +325,10 @@
 
           <div class="prompt-output" id="ptab-style">
             <div class="prompt-box final" id="finalStylePrompt"></div>
-            <button class="btn btn-primary btn-lg" id="copyFinalInline">Copier le prompt</button>
+            <div style="display:flex;align-items:center;gap:1rem;">
+              <button class="btn btn-primary btn-lg" id="copyFinalInline">Copier le prompt</button>
+              <span id="stylePromptCharCount" style="font-family:var(--mono,monospace);font-size:0.8rem;color:#6b7280;"></span>
+            </div>
           </div>
           <div class="prompt-output hidden" id="ptab-lyrics">
             <div class="prompt-box final" id="finalLyricsPrompt"></div>

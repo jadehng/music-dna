@@ -583,19 +583,16 @@ class AudioAnalyzer {
   // ═══════════════════════════════════════
 
   generateSunoPrompt(analysis) {
-    const { bpm, key, energy, characteristics, genres, moodProfile, mlMood, mlDanceability } = analysis;
+    // v5.5 formula: Genre → Mood → Energy → Vocal → Instruments → BPM → Key → Production
+    const { bpm, key, energy, characteristics, genres, moodProfile, mlMood, mlDanceability, spectral } = analysis;
     const parts = [];
 
-    // GENRE (max 2 for v5)
+    // 1. GENRE (max 2 — v5.5 still penalises genre overload)
     if (genres.primary.length > 0) {
       parts.push(genres.primary.slice(0, 2).join(', '));
     }
 
-    // BPM + Key
-    parts.push(`${bpm.bpm} BPM`);
-    parts.push(key.fullKey);
-
-    // MOOD from ML (much more precise than DSP-only)
+    // 2. MOOD — ML is most precise, DSP as fallback
     if (moodProfile) {
       parts.push(moodProfile.primary.toLowerCase());
       if (moodProfile.secondaryScore > 25) {
@@ -603,35 +600,62 @@ class AudioAnalyzer {
       }
     }
 
-    // ENERGY descriptor
+    // 3. ENERGY descriptor
     if (energy.normalized > 75) parts.push('high energy, driving');
     else if (energy.normalized > 50) parts.push('moderate energy');
     else if (energy.normalized > 30) parts.push('chill');
     else parts.push('ambient, atmospheric');
 
-    // CHARACTER (max 3 for v5 clarity)
-    const descriptors = [];
-    if (characteristics.bassWeight > 65) descriptors.push('heavy sub-bass');
-    if (characteristics.brightness > 60) descriptors.push('crispy hi-hats');
-    if (characteristics.complexity < 40) descriptors.push('minimal');
-    if (characteristics.complexity > 65) descriptors.push('complex layers');
-    if (characteristics.danceability > 70) descriptors.push('groovy');
-    if (characteristics.hypnotic > 60 && characteristics.complexity < 50) descriptors.push('repetitive patterns');
-    if (descriptors.length) parts.push(descriptors.slice(0, 3).join(', '));
+    // 4. VOCAL STYLE — infer from genre/BPM range (can be overridden in Studio)
+    const isElectronicRange = /Techno|House|Trance|Midtempo|Hardcore|Gabber|Downtempo/i.test(bpm.range);
+    const isElectronicGenre = genres.primary.some(g =>
+      /techno|house|ambient|industrial|bass|trance|electro|midtempo|synthwave|darkwave|psytrance/i.test(g)
+    );
+    if (isElectronicRange || isElectronicGenre) {
+      parts.push('instrumental');
+    } else if (moodProfile) {
+      // For non-electronic, suggest a vocal style matching the mood
+      const vocalByMood = {
+        'Haunting': 'ethereal whispered vocals',
+        'Melancholic': 'melancholic vocals, breathy',
+        'Triumphant': 'powerful belted vocals',
+        'Joyful': 'uplifting bright vocals',
+        'Intense': 'raw intense vocals',
+        'Chill But Focused': 'smooth conversational vocals',
+      };
+      const vocalStyle = vocalByMood[moodProfile.primary];
+      if (vocalStyle) parts.push(vocalStyle);
+    }
 
-    // PRODUCTION texture from mood analysis
+    // 5. KEY INSTRUMENTS — from spectral + characteristics
+    const instruments = [];
+    if (characteristics.bassWeight > 65) instruments.push('heavy sub-bass');
+    if (spectral && spectral.subBass > 0.6) instruments.push('deep 808');
+    if (characteristics.brightness > 60) instruments.push('crispy hi-hats');
+    if (characteristics.complexity > 65) instruments.push('layered synths');
+    else if (characteristics.complexity < 35 && characteristics.hypnotic > 60) instruments.push('minimal kick');
+    if (characteristics.darkness > 65) instruments.push('industrial percussion');
+    if (instruments.length) parts.push(instruments.slice(0, 3).join(', '));
+
+    // 6. BPM + Key (technical anchors)
+    parts.push(`${bpm.bpm} BPM`);
+    parts.push(key.fullKey);
+
+    // 7. PRODUCTION — texture + mix quality (v5.5 production words)
     if (moodProfile?.textureTag) parts.push(moodProfile.textureTag.toLowerCase());
     if (characteristics.darkness > 55) parts.push('industrial textures');
-
-    parts.push('clean mix');
+    if (energy.normalized > 65) parts.push('polished studio mix');
+    else if (characteristics.brightness < 40 && energy.normalized < 45) parts.push('lo-fi warmth');
+    else parts.push('clean mix');
 
     let result = parts.join(', ').replace(/,\s*,/g, ',').trim();
 
-    if (result.length > 200) {
+    // v5.5 Style Prompt cap: 1 000 chars (was 200 in v5.0)
+    if (result.length > 1000) {
       const allParts = result.split(',').map(s => s.trim());
       let trimmed = '';
       for (const p of allParts) {
-        if ((trimmed + ', ' + p).length > 200) break;
+        if ((trimmed + ', ' + p).length > 1000) break;
         trimmed = trimmed ? trimmed + ', ' + p : p;
       }
       result = trimmed;
@@ -644,7 +668,7 @@ class AudioAnalyzer {
     const tips = [];
     const { bpm, key, characteristics, genres, energy, moodProfile, mlMood, mlDanceability, mlGenre } = analysis;
 
-    tips.push(`🎵 Suno v5: max 2 genres dans le Style Prompt (au-dela, resultats generiques)`);
+    tips.push(`🎵 Suno v5.5: max 2 genres dans le Style Prompt (au-dela, resultats generiques) — limite portee a 1 000 chars`);
     tips.push(`🎹 Tonalite "${key.fullKey}" — garde cette cle pour un mood coherent`);
     tips.push(`⏱ BPM ${bpm.bpm} — ajuste +/- 5 BPM pour varier sans changer le genre`);
 
@@ -676,9 +700,11 @@ class AudioAnalyzer {
       tips.push(`🎶 Genres ML: ${top3.join(', ')}`);
     }
 
-    tips.push('📝 v5 prefere les prompts narratifs — decris une scene plutot que des tags !');
+    tips.push('📝 v5.5 prefere les prompts narratifs — decris une scene plutot que des tags !');
+    tips.push('🎤 Precise le style vocal: "instrumental", "whispered vocals", "raspy male vocals"... sinon Suno ajoute des voix par defaut');
     tips.push('🔇 Pour instrumental: mets [Instrumental] en premiere ligne des Lyrics');
     tips.push('✂️ Regle: 2-3 instruments max par section pour un meilleur rendu');
+    tips.push('🎛️ v5.5 Lyrics: jusqu\'a 3 000 chars / 40-60 lignes — plus tu es precis, meilleur le resultat');
 
     return tips;
   }
