@@ -15,6 +15,16 @@ const crypto = require('crypto');
 
 const execAsync = promisify(exec);
 
+// Pure-JS fallback extractor (no binary needed) — used on Netlify Lambda where
+// yt-dlp isn't installed. Lazy-required so a missing module never breaks yt-dlp path.
+let ytdl = null;
+function getYtdl() {
+  if (ytdl === null) {
+    try { ytdl = require('@distube/ytdl-core'); } catch (e) { ytdl = false; }
+  }
+  return ytdl;
+}
+
 // Robust YouTube video-ID extraction. Accepts every common form: watch?v=,
 // youtu.be/, /shorts/, /embed/, /live/, /v/, music.youtube.com, m.youtube.com,
 // youtube-nocookie.com, bare 11-char IDs, and any query-param order.
@@ -108,6 +118,42 @@ async function extractWithYtDlp(url) {
   return { buffer, title, mimeType };
 }
 
+// Fallback extraction with @distube/ytdl-core (pure JS, works in serverless).
+// Streams the lowest audio-only format and caps the buffer at 5MB — enough for
+// BPM/key/spectral analysis. No ffmpeg / binary required.
+async function extractWithYtdlCore(url) {
+  const lib = getYtdl();
+  if (!lib) throw new Error('ytdl-core not available');
+
+  const info = await lib.getInfo(url);
+  const title = (info.videoDetails && info.videoDetails.title) || 'YouTube Track';
+  const format = lib.chooseFormat(info.formats, { quality: 'lowestaudio', filter: 'audioonly' });
+  const container = (format && format.container) || 'webm';
+  const mimeMap = { webm: 'audio/webm', m4a: 'audio/mp4', mp4: 'audio/mp4', mp3: 'audio/mpeg', opus: 'audio/ogg', ogg: 'audio/ogg' };
+  const mimeType = mimeMap[container] || 'audio/webm';
+
+  const CAP = 5 * 1024 * 1024;
+  const buffer = await new Promise((resolve, reject) => {
+    const chunks = [];
+    let size = 0;
+    let done = false;
+    const finish = () => { if (!done) { done = true; resolve(Buffer.concat(chunks)); } };
+    const stream = lib.downloadFromInfo(info, { format, highWaterMark: 1 << 20 });
+    stream.on('data', (c) => {
+      if (done) return;
+      chunks.push(c);
+      size += c.length;
+      if (size >= CAP) { try { stream.destroy(); } catch (e) {} finish(); }
+    });
+    stream.on('end', finish);
+    stream.on('close', finish);
+    stream.on('error', (e) => { if (!done) { done = true; reject(e); } });
+  });
+
+  const out = buffer.length > CAP ? buffer.slice(0, CAP) : buffer;
+  return { buffer: out, title, mimeType };
+}
+
 exports.handler = async (event) => {
   const url = event.queryStringParameters?.url;
 
@@ -130,7 +176,17 @@ exports.handler = async (event) => {
   const normalizedUrl = `https://www.youtube.com/watch?v=${videoId}`;
 
   try {
-    const { buffer, title, mimeType } = await extractWithYtDlp(normalizedUrl);
+    // Prefer yt-dlp (best reliability, used in local `netlify dev` on Mac).
+    // On Netlify's Lambda yt-dlp isn't installed ("command not found"), so fall
+    // back to the pure-JS @distube/ytdl-core path.
+    let extracted;
+    try {
+      extracted = await extractWithYtDlp(normalizedUrl);
+    } catch (ytDlpErr) {
+      console.warn('yt-dlp unavailable/failed, falling back to ytdl-core:', ytDlpErr.message);
+      extracted = await extractWithYtdlCore(normalizedUrl);
+    }
+    const { buffer, title, mimeType } = extracted;
 
     // Safety cap: if file is huge, trim to first 10MB
     const capped = buffer.length > 10 * 1024 * 1024
@@ -149,13 +205,13 @@ exports.handler = async (event) => {
       isBase64Encoded: true
     };
   } catch (error) {
-    console.error('yt-dlp extraction error:', error.message);
-    console.error('stderr:', error.stderr);
+    console.error('YouTube extraction error:', error.message);
+    if (error.stderr) console.error('stderr:', error.stderr);
     return {
       statusCode: 500,
       body: JSON.stringify({
-        error: 'Extraction failed: ' + (error.stderr || error.message).split('\n')[0],
-        hint: 'Verifie que yt-dlp est installe (brew install yt-dlp). Sinon, telecharge le MP3 manuellement.'
+        error: 'Extraction failed: ' + (error.stderr || error.message || '').split('\n')[0],
+        hint: 'YouTube bloque parfois les serveurs (datacenter). Réessaie, ou télécharge le MP3 et utilise l\'upload de fichier.'
       })
     };
   }
