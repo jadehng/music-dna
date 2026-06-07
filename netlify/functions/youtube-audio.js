@@ -25,6 +25,30 @@ function getYtdl() {
   return ytdl;
 }
 
+// Build an authenticated agent from cookies stored in the YOUTUBE_COOKIES env var.
+// YouTube blocks datacenter IPs (Netlify/AWS) with "Sign in to confirm you're not
+// a bot"; presenting a logged-in account's cookies makes requests look authenticated
+// and defeats that check. The env var holds the JSON array exported by a browser
+// cookie extension (e.g. "EditThisCookie" / "Get cookies.txt" → JSON). Cached across
+// warm invocations. Returns null if not configured (callers then run cookie-less).
+let cachedAgent;
+function getAgent(lib) {
+  if (cachedAgent !== undefined) return cachedAgent;
+  cachedAgent = null;
+  const raw = process.env.YOUTUBE_COOKIES;
+  if (raw && typeof lib.createAgent === 'function') {
+    try {
+      const cookies = JSON.parse(raw);
+      if (Array.isArray(cookies) && cookies.length) {
+        cachedAgent = lib.createAgent(cookies);
+      }
+    } catch (e) {
+      console.warn('YOUTUBE_COOKIES is set but not valid JSON cookie array:', e.message);
+    }
+  }
+  return cachedAgent;
+}
+
 // Robust YouTube video-ID extraction. Accepts every common form: watch?v=,
 // youtu.be/, /shorts/, /embed/, /live/, /v/, music.youtube.com, m.youtube.com,
 // youtube-nocookie.com, bare 11-char IDs, and any query-param order.
@@ -125,7 +149,10 @@ async function extractWithYtdlCore(url) {
   const lib = getYtdl();
   if (!lib) throw new Error('ytdl-core not available');
 
-  const info = await lib.getInfo(url);
+  const agent = getAgent(lib);
+  const reqOpts = agent ? { agent } : {};
+
+  const info = await lib.getInfo(url, reqOpts);
   const title = (info.videoDetails && info.videoDetails.title) || 'YouTube Track';
   const format = lib.chooseFormat(info.formats, { quality: 'lowestaudio', filter: 'audioonly' });
   const container = (format && format.container) || 'webm';
@@ -138,7 +165,7 @@ async function extractWithYtdlCore(url) {
     let size = 0;
     let done = false;
     const finish = () => { if (!done) { done = true; resolve(Buffer.concat(chunks)); } };
-    const stream = lib.downloadFromInfo(info, { format, highWaterMark: 1 << 20 });
+    const stream = lib.downloadFromInfo(info, { format, highWaterMark: 1 << 20, ...reqOpts });
     stream.on('data', (c) => {
       if (done) return;
       chunks.push(c);
@@ -211,7 +238,9 @@ exports.handler = async (event) => {
       statusCode: 500,
       body: JSON.stringify({
         error: 'Extraction failed: ' + (error.stderr || error.message || '').split('\n')[0],
-        hint: 'YouTube bloque parfois les serveurs (datacenter). Réessaie, ou télécharge le MP3 et utilise l\'upload de fichier.'
+        hint: /sign in|not a bot|confirm/i.test(error.message || '')
+          ? 'YouTube demande une connexion (anti-bot). Configure les cookies YOUTUBE_COOKIES sur Netlify, ou télécharge le MP3 et utilise l\'upload de fichier.'
+          : 'YouTube bloque parfois les serveurs (datacenter). Réessaie, ou télécharge le MP3 et utilise l\'upload de fichier.'
       })
     };
   }
