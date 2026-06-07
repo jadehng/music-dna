@@ -69,18 +69,43 @@ dropZone.addEventListener('drop', (e) => {
 analyzeYtBtn.addEventListener('click', () => handleYouTube());
 youtubeUrl.addEventListener('keydown', (e) => { if (e.key === 'Enter') handleYouTube(); });
 
+// Robust YouTube video-ID extraction. Accepts every common form: watch?v=,
+// youtu.be/, /shorts/, /embed/, /live/, /v/, music.youtube.com, m.youtube.com,
+// youtube-nocookie.com, bare 11-char IDs, and any query-param order.
+function extractYouTubeId(input) {
+  if (!input) return null;
+  const s = String(input).trim();
+  if (/^[\w-]{11}$/.test(s)) return s;
+  let u;
+  try { u = new URL(s); } catch (e) { return null; }
+  const host = u.hostname.replace(/^www\./, '').toLowerCase();
+  if (host === 'youtu.be') {
+    const id = u.pathname.slice(1, 12);
+    return /^[\w-]{11}$/.test(id) ? id : null;
+  }
+  if (host === 'youtube.com' || host.endsWith('.youtube.com') ||
+      host === 'youtube-nocookie.com' || host.endsWith('.youtube-nocookie.com')) {
+    const v = u.searchParams.get('v');
+    if (v && /^[\w-]{11}$/.test(v)) return v;
+    const m = u.pathname.match(/\/(?:embed|shorts|live|v|e)\/([\w-]{11})/);
+    if (m) return m[1];
+  }
+  return null;
+}
+
 async function handleYouTube() {
   const url = youtubeUrl.value.trim();
   if (!url) return;
 
-  const ytRegex = /(?:youtube\.com\/watch\?v=|youtu\.be\/|youtube\.com\/shorts\/)([\w-]{11})/;
-  const match = url.match(ytRegex);
-  if (!match) { showToast('URL YouTube invalide'); return; }
+  const videoId = extractYouTubeId(url);
+  if (!videoId) { showToast('URL YouTube invalide'); return; }
+  // Normalize to a canonical watch URL so the backend + yt-dlp always get a clean link.
+  const normalizedUrl = `https://www.youtube.com/watch?v=${videoId}`;
 
   showLoading('Extraction audio YouTube...');
 
   try {
-    const response = await fetch(`/.netlify/functions/youtube-audio?url=${encodeURIComponent(url)}`);
+    const response = await fetch(`/.netlify/functions/youtube-audio?url=${encodeURIComponent(normalizedUrl)}`);
     if (!response.ok) {
       const err = await response.json().catch(() => ({}));
       throw new Error(err.error || 'Erreur extraction YouTube');
@@ -88,7 +113,7 @@ async function handleYouTube() {
 
     setLoadingText('Decodage audio...');
     const arrayBuffer = await response.arrayBuffer();
-    const title = response.headers.get('X-Video-Title') || `YouTube - ${match[1]}`;
+    const title = response.headers.get('X-Video-Title') || `YouTube - ${videoId}`;
 
     setLoadingText('Analyse en cours...');
     const result = await analyzer.analyzeArrayBuffer(arrayBuffer, title);

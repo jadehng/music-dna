@@ -15,6 +15,30 @@ const crypto = require('crypto');
 
 const execAsync = promisify(exec);
 
+// Robust YouTube video-ID extraction. Accepts every common form: watch?v=,
+// youtu.be/, /shorts/, /embed/, /live/, /v/, music.youtube.com, m.youtube.com,
+// youtube-nocookie.com, bare 11-char IDs, and any query-param order.
+function extractYouTubeId(input) {
+  if (!input) return null;
+  const s = String(input).trim();
+  if (/^[\w-]{11}$/.test(s)) return s;
+  let u;
+  try { u = new URL(s); } catch (e) { return null; }
+  const host = u.hostname.replace(/^www\./, '').toLowerCase();
+  if (host === 'youtu.be') {
+    const id = u.pathname.slice(1, 12);
+    return /^[\w-]{11}$/.test(id) ? id : null;
+  }
+  if (host === 'youtube.com' || host.endsWith('.youtube.com') ||
+      host === 'youtube-nocookie.com' || host.endsWith('.youtube-nocookie.com')) {
+    const v = u.searchParams.get('v');
+    if (v && /^[\w-]{11}$/.test(v)) return v;
+    const m = u.pathname.match(/\/(?:embed|shorts|live|v|e)\/([\w-]{11})/);
+    if (m) return m[1];
+  }
+  return null;
+}
+
 // Try to find yt-dlp in common install locations
 function findYtDlp() {
   const candidates = [
@@ -94,16 +118,19 @@ exports.handler = async (event) => {
     };
   }
 
-  // Basic URL validation
-  if (!/^https?:\/\/(www\.)?(youtube\.com|youtu\.be)\//i.test(url)) {
+  // Validate + normalize: accept all common YouTube URL forms (watch, youtu.be,
+  // shorts, embed, live, /v/, music./m. subdomains, nocookie), not just watch?v=.
+  const videoId = extractYouTubeId(url);
+  if (!videoId) {
     return {
       statusCode: 400,
       body: JSON.stringify({ error: 'Invalid YouTube URL' })
     };
   }
+  const normalizedUrl = `https://www.youtube.com/watch?v=${videoId}`;
 
   try {
-    const { buffer, title, mimeType } = await extractWithYtDlp(url);
+    const { buffer, title, mimeType } = await extractWithYtDlp(normalizedUrl);
 
     // Safety cap: if file is huge, trim to first 10MB
     const capped = buffer.length > 10 * 1024 * 1024
