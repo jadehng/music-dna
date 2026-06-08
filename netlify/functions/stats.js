@@ -6,7 +6,9 @@
  */
 const { getStats } = require('../usage.js');
 
-exports.handler = async () => {
+exports.handler = async (event) => {
+  // Wire Blobs context for this legacy function before reading the store.
+  try { require('@netlify/blobs').connectLambda(event); } catch (e) {}
   const stats = await getStats();
   return {
     statusCode: 200,

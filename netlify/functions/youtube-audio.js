@@ -187,6 +187,11 @@ async function extractWithYtdlCore(url) {
 }
 
 exports.handler = async (event) => {
+  // Legacy (Lambda-compatible) functions don't auto-wire Netlify Blobs; this
+  // connects the Blobs context from the event so getStore() works at runtime
+  // (used for cookie auth + usage tracking). Best-effort; never fatal.
+  try { require('@netlify/blobs').connectLambda(event); } catch (e) {}
+
   const url = event.queryStringParameters?.url;
 
   if (!url) {
