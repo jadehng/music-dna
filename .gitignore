@@ -3,5 +3,11 @@ node_modules/
 .env
 *.log
 .DS_Store
+cookies.rtf
+cookies.json
+cookies.min.json
+cookies*.txt
 1775832391951-player-script.js
 1775832391961-player-script.js
+
+cookies.trim.json

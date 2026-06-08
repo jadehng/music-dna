@@ -8,7 +8,8 @@
     "deploy": "netlify deploy --prod"
   },
   "dependencies": {
-    "@distube/ytdl-core": "^4.16.12"
+    "@distube/ytdl-core": "^4.16.12",
+    "@netlify/blobs": "^8.2.0"
   },
   "devDependencies": {
     "netlify-cli": "^17.0.0"

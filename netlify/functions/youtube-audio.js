@@ -215,6 +215,14 @@ exports.handler = async (event) => {
     }
     const { buffer, title, mimeType } = extracted;
 
+    // Best-effort: count this visitor so the owner gets reminded to remove the
+    // shared YouTube account once real traffic shows up. Never blocks the response.
+    try {
+      const { recordUser } = require('../usage.js');
+      const count = await recordUser(event);
+      if (count != null) console.log('unique extraction users:', count);
+    } catch (e) { /* tracking is non-critical */ }
+
     // Safety cap: if file is huge, trim to first 10MB
     const capped = buffer.length > 10 * 1024 * 1024
       ? buffer.slice(0, 10 * 1024 * 1024)
