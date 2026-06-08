@@ -25,35 +25,6 @@ function getYtdl() {
   return ytdl;
 }
 
-// Build an authenticated agent from cookies stored in Netlify Blobs.
-// YouTube blocks datacenter IPs (Netlify/AWS) with "Sign in to confirm you're not
-// a bot"; presenting a logged-in account's cookies makes requests look authenticated
-// and defeats that check. The cookies are a JSON array exported by a browser cookie
-// extension (e.g. "Get cookies.txt LOCALLY" → JSON), written to the 'youtube-secrets'
-// blob store under key 'cookies'. We use Blobs rather than an env var because the
-// full cookie set (~6.5KB) blows past AWS Lambda's 4KB *total* env-var limit, which
-// blocks the whole function from deploying. Cached across warm invocations. Returns
-// null if not configured (callers then run cookie-less).
-let cachedAgent;
-async function getAgent(lib) {
-  if (cachedAgent !== undefined) return cachedAgent;
-  cachedAgent = null;
-  if (typeof lib.createAgent !== 'function') return cachedAgent;
-  try {
-    const { getStore } = require('@netlify/blobs');
-    const store = getStore('youtube-secrets');
-    const cookies = await store.get('cookies', { type: 'json' });
-    if (Array.isArray(cookies) && cookies.length) {
-      cachedAgent = lib.createAgent(cookies);
-    } else {
-      console.warn('youtube-secrets/cookies blob missing or not a cookie array');
-    }
-  } catch (e) {
-    console.warn('could not load YouTube cookies from Blobs:', e.message);
-  }
-  return cachedAgent;
-}
-
 // Robust YouTube video-ID extraction. Accepts every common form: watch?v=,
 // youtu.be/, /shorts/, /embed/, /live/, /v/, music.youtube.com, m.youtube.com,
 // youtube-nocookie.com, bare 11-char IDs, and any query-param order.
@@ -154,10 +125,7 @@ async function extractWithYtdlCore(url) {
   const lib = getYtdl();
   if (!lib) throw new Error('ytdl-core not available');
 
-  const agent = await getAgent(lib);
-  const reqOpts = agent ? { agent } : {};
-
-  const info = await lib.getInfo(url, reqOpts);
+  const info = await lib.getInfo(url);
   const title = (info.videoDetails && info.videoDetails.title) || 'YouTube Track';
   const format = lib.chooseFormat(info.formats, { quality: 'lowestaudio', filter: 'audioonly' });
   const container = (format && format.container) || 'webm';
@@ -170,7 +138,7 @@ async function extractWithYtdlCore(url) {
     let size = 0;
     let done = false;
     const finish = () => { if (!done) { done = true; resolve(Buffer.concat(chunks)); } };
-    const stream = lib.downloadFromInfo(info, { format, highWaterMark: 1 << 20, ...reqOpts });
+    const stream = lib.downloadFromInfo(info, { format, highWaterMark: 1 << 20 });
     stream.on('data', (c) => {
       if (done) return;
       chunks.push(c);
@@ -187,11 +155,6 @@ async function extractWithYtdlCore(url) {
 }
 
 exports.handler = async (event) => {
-  // Legacy (Lambda-compatible) functions don't auto-wire Netlify Blobs; this
-  // connects the Blobs context from the event so getStore() works at runtime
-  // (used for cookie auth + usage tracking). Best-effort; never fatal.
-  try { require('@netlify/blobs').connectLambda(event); } catch (e) {}
-
   const url = event.queryStringParameters?.url;
 
   if (!url) {
@@ -225,14 +188,6 @@ exports.handler = async (event) => {
     }
     const { buffer, title, mimeType } = extracted;
 
-    // Best-effort: count this visitor so the owner gets reminded to remove the
-    // shared YouTube account once real traffic shows up. Never blocks the response.
-    try {
-      const { recordUser } = require('../usage.js');
-      const count = await recordUser(event);
-      if (count != null) console.log('unique extraction users:', count);
-    } catch (e) { /* tracking is non-critical */ }
-
     // Safety cap: if file is huge, trim to first 10MB
     const capped = buffer.length > 10 * 1024 * 1024
       ? buffer.slice(0, 10 * 1024 * 1024)
@@ -256,9 +211,7 @@ exports.handler = async (event) => {
       statusCode: 500,
       body: JSON.stringify({
         error: 'Extraction failed: ' + (error.stderr || error.message || '').split('\n')[0],
-        hint: /sign in|not a bot|confirm/i.test(error.message || '')
-          ? 'YouTube demande une connexion (anti-bot). Les cookies du compte partagé ont peut-être expiré — sinon, télécharge le MP3 et utilise l\'upload de fichier.'
-          : 'YouTube bloque parfois les serveurs (datacenter). Réessaie, ou télécharge le MP3 et utilise l\'upload de fichier.'
+        hint: 'YouTube bloque souvent l\'extraction côté serveur. Télécharge le MP3 et utilise l\'onglet Upload fichier (plus fiable).'
       })
     };
   }
