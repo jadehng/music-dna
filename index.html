@@ -36,7 +36,7 @@
       <!-- Input Section -->
       <section class="input-section">
         <div class="tabs">
-          <button class="tab active" data-tab="upload">Upload fichier</button>
+          <button class="tab active" data-tab="upload">Upload fichier <span class="tab-badge">recommandé</span></button>
           <button class="tab" data-tab="youtube">YouTube URL</button>
           <button class="tab" data-tab="suno">Suno URL</button>
         </div>
@@ -51,6 +51,7 @@
             </div>
             <p>Glisse ton fichier audio ici</p>
             <p class="small">MP3, WAV, FLAC, OGG - Max 50MB</p>
+            <p class="small">Méthode la plus fiable et la plus rapide ⚡</p>
             <input type="file" id="fileInput" accept="audio/*" hidden multiple>
             <button class="btn btn-outline" id="browseBtn">Parcourir</button>
           </div>
@@ -61,7 +62,8 @@
             <input type="text" id="youtubeUrl" placeholder="https://www.youtube.com/watch?v=..." />
             <button class="btn btn-primary" id="analyzeYtBtn">Analyser</button>
           </div>
-          <p class="hint">Colle un lien YouTube et on extrait l'audio automatiquement</p>
+          <p class="hint">Colle un lien YouTube et on extrait l'audio automatiquement.</p>
+          <p class="hint hint-warn">⚠️ YouTube bloque parfois l'extraction côté serveur. Si ça échoue, télécharge le MP3 et utilise l'onglet <strong>Upload fichier</strong> (plus fiable).</p>
         </div>
 
         <div class="tab-content hidden" id="tab-suno">
@@ -367,6 +369,28 @@
             </ul>
           </div>
         </div>
+
+        <!-- ═══ STEM ANALYSIS (Phase 3 — optional) ═══ -->
+        <div class="stem-section" id="stemSection">
+          <div class="stem-section-header">
+            <div>
+              <h3>Analyse des couches <span class="stem-badge">Optionnel</span></h3>
+              <p class="stem-section-desc">Decompose le morceau en 5 stems spectraux. Chaque couche genere un mini-prompt Suno v5.5 pret a coller pour une generation separee + mixage post-prod.</p>
+            </div>
+            <button class="btn btn-outline" id="analyzeLayersBtn">
+              <span>🔬</span> Analyser les couches
+            </button>
+          </div>
+
+          <!-- Results: hidden until analysis runs -->
+          <div class="stem-results hidden" id="stemResults">
+            <div class="stem-grid" id="stemGrid">
+              <!-- Filled dynamically by app.js -->
+            </div>
+            <p class="stem-usage-hint">💡 Colle chaque mini-prompt dans Suno en mode Custom (instrumental). Mixe les generations dans ton DAW pour un son entierement personnalise.</p>
+          </div>
+        </div>
+
       </section>
     </main>
 

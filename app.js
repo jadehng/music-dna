@@ -282,6 +282,300 @@ function displaySingleResult(result) {
 
   // Feed to Prompt Studio
   studio.setAnalysisData(result);
+
+  // ── Phase 3: Stem analysis button (optional, on demand)
+  _wireLayerAnalysis(result);
+}
+
+// ═══════════════════════════════════════════════════════
+// STEM PLAYER — OfflineAudioContext pre-rendering
+//
+// Each stem is isolated by rendering the source AudioBuffer
+// through N cascaded BiquadFilters in an OfflineAudioContext
+// (faster than real-time, no CPU budget on playback).
+//
+// Cascading N identical filters multiplies the rolloff:
+//   1 stage = 12 dB/oct  →  6 stages = 72 dB/oct (≈ brick wall)
+//
+// Rendered buffers are cached per-stem so the first click
+// takes ~1-2 s (render) and subsequent clicks are instant.
+// Cache is cleared whenever a new track is loaded.
+// ═══════════════════════════════════════════════════════
+const StemPlayer = {
+  ctx: null,          // AudioContext for playback
+  sourceNode: null,   // current playing source
+  activeStemId: null,
+  cache: {},          // stemId → rendered AudioBuffer
+
+  // Per-stem filter specs.
+  // loCut = highpass cutoff (Hz), hiCut = lowpass cutoff (Hz)
+  // stages = how many identical filters to cascade on EACH side
+  // gain   = makeup gain after filtering (bandpass attenuates level)
+  BANDS: {
+    kick_sub:    { loCut: null, hiCut: 150,   stages: 6, gain: 5.0 },
+    bass_line:   { loCut: 80,  hiCut: 400,   stages: 6, gain: 4.5 },
+    pads_chords: { loCut: 300, hiCut: 3500,  stages: 5, gain: 3.5 },
+    lead_melody: { loCut: 1500,hiCut: 10000, stages: 5, gain: 4.0 },
+    hihats_air:  { loCut: 6000,hiCut: null,  stages: 6, gain: 6.0 },
+  },
+
+  // ── Offline render of a single stem ──────────────────
+  async renderStem(stemId) {
+    if (this.cache[stemId]) return this.cache[stemId];
+
+    const src = analyzer.audioBuffer;
+    if (!src) throw new Error('No audioBuffer on analyzer');
+
+    const cfg    = this.BANDS[stemId];
+    const ch     = src.numberOfChannels;
+    const len    = src.length;
+    const rate   = src.sampleRate;
+
+    const offCtx = new OfflineAudioContext(ch, len, rate);
+
+    // Source node
+    const srcNode = offCtx.createBufferSource();
+    srcNode.buffer = src;
+
+    // Build filter chain: all LP stages first, then all HP stages.
+    // This order minimises numerical instability.
+    const nodes = [srcNode];
+
+    if (cfg.hiCut) {
+      for (let i = 0; i < cfg.stages; i++) {
+        const f = offCtx.createBiquadFilter();
+        f.type = 'lowpass';
+        f.frequency.value = cfg.hiCut;
+        f.Q.value = 0.707; // Butterworth — maximally flat passband
+        nodes.push(f);
+      }
+    }
+    if (cfg.loCut) {
+      for (let i = 0; i < cfg.stages; i++) {
+        const f = offCtx.createBiquadFilter();
+        f.type = 'highpass';
+        f.frequency.value = cfg.loCut;
+        f.Q.value = 0.707;
+        nodes.push(f);
+      }
+    }
+
+    // Makeup gain
+    const gainNode = offCtx.createGain();
+    gainNode.gain.value = cfg.gain;
+    nodes.push(gainNode);
+    nodes.push(offCtx.destination);
+
+    // Wire chain
+    for (let i = 0; i < nodes.length - 1; i++) {
+      nodes[i].connect(nodes[i + 1]);
+    }
+
+    srcNode.start();
+    const rendered = await offCtx.startRendering();
+    this.cache[stemId] = rendered;
+    return rendered;
+  },
+
+  // ── Play a stem (renders on first call, instant on repeat) ──
+  async play(stemId, onStart, onEnd) {
+    this.stop();
+
+    // AudioContext for playback — created on first user gesture
+    if (!this.ctx || this.ctx.state === 'closed') {
+      this.ctx = new (window.AudioContext || window.webkitAudioContext)();
+    }
+    if (this.ctx.state === 'suspended') await this.ctx.resume();
+
+    const buffer = await this.renderStem(stemId);
+
+    // In case stop() was called while we were rendering
+    if (this.activeStemId !== null && this.activeStemId !== stemId) return;
+
+    const source = this.ctx.createBufferSource();
+    source.buffer = buffer;
+    source.connect(this.ctx.destination);
+
+    source.onended = () => {
+      if (this.activeStemId === stemId) {
+        this.activeStemId = null;
+        this.sourceNode = null;
+      }
+      if (onEnd) onEnd();
+    };
+
+    source.start();
+    this.sourceNode = source;
+    this.activeStemId = stemId;
+    if (onStart) onStart();
+  },
+
+  stop() {
+    if (this.sourceNode) {
+      try { this.sourceNode.stop(); } catch (e) {}
+      this.sourceNode = null;
+    }
+    this.activeStemId = null;
+  },
+
+  isPlaying(stemId) { return this.activeStemId === stemId; },
+
+  // Call when a new track is loaded — clears rendered buffers
+  reset() {
+    this.stop();
+    this.cache = {};
+  },
+};
+
+/**
+ * Wire up the "Analyser les couches" button for a given analysis result.
+ * Creates a fresh handler each time a track is loaded.
+ */
+function _wireLayerAnalysis(result) {
+  const btn = document.getElementById('analyzeLayersBtn');
+  const stemResults = document.getElementById('stemResults');
+  const stemGrid = document.getElementById('stemGrid');
+  if (!btn || !stemResults || !stemGrid) return;
+
+  // Reset: hide results, stop any playback, clear grid
+  StemPlayer.reset();
+  stemResults.classList.add('hidden');
+  stemGrid.innerHTML = '';
+  btn.disabled = false;
+  btn.innerHTML = '<span>🔬</span> Analyser les couches';
+
+  btn.onclick = () => {
+    btn.disabled = true;
+    btn.innerHTML = '<span>⏳</span> Analyse en cours…';
+
+    setTimeout(() => {
+      try {
+        const stems = analyzer.generateStemAnalysis(result);
+        stemGrid.innerHTML = stems.map(stem => _renderStemCard(stem)).join('');
+
+        // Wire copy buttons
+        stemGrid.querySelectorAll('[data-copy-stem]').forEach(copyBtn => {
+          copyBtn.addEventListener('click', () => {
+            const stemId = copyBtn.dataset.copyStem;
+            const target = stems.find(s => s.id === stemId);
+            if (!target) return;
+            navigator.clipboard.writeText(target.prompt).then(() => {
+              copyBtn.textContent = '✓ Copie !';
+              setTimeout(() => { copyBtn.textContent = 'Copier'; }, 2000);
+            });
+          });
+        });
+
+        // Wire play buttons (async — first click renders offline, subsequent instant)
+        stemGrid.querySelectorAll('[data-play-stem]').forEach(playBtn => {
+          playBtn.addEventListener('click', async () => {
+            const stemId = playBtn.dataset.playStem;
+
+            if (StemPlayer.isPlaying(stemId)) {
+              // Toggle off — stop playback
+              StemPlayer.stop();
+              _resetAllPlayBtns(stemGrid);
+              return;
+            }
+
+            // Stop whatever was playing, reset all buttons
+            StemPlayer.stop();
+            _resetAllPlayBtns(stemGrid);
+
+            // Show loading state if not yet cached
+            const isCached = !!StemPlayer.cache[stemId];
+            if (!isCached) {
+              playBtn.innerHTML = '⏳ Rendu…';
+              playBtn.disabled = true;
+            }
+
+            try {
+              await StemPlayer.play(
+                stemId,
+                // onStart — called once buffer is ready and playing
+                () => {
+                  playBtn.innerHTML = '⏹ Stop';
+                  playBtn.classList.add('playing');
+                  playBtn.disabled = false;
+                },
+                // onEnd — natural end of track
+                () => {
+                  playBtn.innerHTML = '▶ Écouter';
+                  playBtn.classList.remove('playing');
+                  playBtn.disabled = false;
+                }
+              );
+            } catch (err) {
+              console.error('Stem render/play error:', err);
+              playBtn.innerHTML = '▶ Écouter';
+              playBtn.disabled = false;
+              showToast('Erreur lecture couche');
+            }
+          });
+        });
+
+        stemResults.classList.remove('hidden');
+        btn.innerHTML = '<span>✓</span> Couches analysées';
+      } catch (err) {
+        console.error('Stem analysis error:', err);
+        btn.disabled = false;
+        btn.innerHTML = '<span>🔬</span> Analyser les couches';
+        showToast('Erreur analyse couches');
+      }
+    }, 50);
+  };
+}
+
+function _resetAllPlayBtns(container) {
+  container.querySelectorAll('[data-play-stem]').forEach(b => {
+    b.innerHTML = '▶ Écouter';
+    b.classList.remove('playing');
+  });
+}
+
+/**
+ * Render a single stem card as an HTML string.
+ */
+function _renderStemCard(stem) {
+  const presenceClass = {
+    'Strong':  'stem-presence--strong',
+    'Present': 'stem-presence--present',
+    'Subtle':  'stem-presence--subtle',
+  }[stem.presence] || '';
+
+  const energyColor = stem.energy > 60 ? '#8b5cf6' : stem.energy > 30 ? '#06b6d4' : '#6b7280';
+
+  return `
+    <div class="stem-card">
+      <div class="stem-card-header">
+        <span class="stem-icon">${stem.icon}</span>
+        <div class="stem-card-title">
+          <strong>${stem.name}</strong>
+          <span class="stem-presence ${presenceClass}">${stem.presence}</span>
+        </div>
+      </div>
+
+      <div class="stem-energy-wrap">
+        <div class="stem-energy-bar">
+          <div class="stem-energy-fill" style="width:${stem.energy}%;background:${energyColor};"></div>
+        </div>
+        <span class="stem-energy-label">${stem.energy}%</span>
+      </div>
+
+      <div class="stem-tags">
+        ${stem.tags.map(t => `<span class="stem-tag">${t}</span>`).join('')}
+      </div>
+
+      <div class="stem-prompt-box">
+        <div class="stem-prompt-text">${stem.prompt}</div>
+      </div>
+
+      <div class="stem-card-actions">
+        <button class="btn btn-outline stem-play-btn" data-play-stem="${stem.id}">▶ Écouter</button>
+        <button class="btn btn-outline stem-copy-btn" data-copy-stem="${stem.id}">Copier</button>
+      </div>
+    </div>
+  `;
 }
 
 function displayMultiResults() {

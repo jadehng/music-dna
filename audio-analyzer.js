@@ -708,6 +708,240 @@ class AudioAnalyzer {
 
     return tips;
   }
+
+  // ═══════════════════════════════════════
+  // PHASE 3 — STEM LAYER ANALYSIS
+  // ═══════════════════════════════════════
+
+  /**
+   * Decompose the track into 5 virtual stems based on spectral band energy.
+   * Each stem gets a presence label, characteristic tags, and a Suno v5.5 mini-prompt
+   * ready to paste into a separate Suno generation for stem-level post-production.
+   *
+   * @param {Object} analysis - full analysis object from analyze()
+   * @returns {Array<Object>} 5 stem objects: { name, icon, bandRange, energy, presence, tags, prompt }
+   */
+  generateStemAnalysis(analysis) {
+    const { spectral, bpm, key, genres, characteristics, moodProfile } = analysis;
+    if (!spectral || !spectral.bands || spectral.bands.length < 64) {
+      console.warn('generateStemAnalysis: insufficient spectral data');
+      return [];
+    }
+
+    const bands = spectral.bands;
+
+    // ── Stem definitions: name, icon, band slice, human-readable focus
+    const stemDefs = [
+      {
+        id:        'kick_sub',
+        name:      'Kick / Sub',
+        icon:      '🥁',
+        start:     0,
+        end:       4,
+        focus:     'punchy kick drum, sub-bass rumble',
+        exclude:   'no melody, no chords, no hi-hats, no mid-range, no vocals',
+        isolation: 'solo kick and sub-bass layer, mix-ready stems',
+      },
+      {
+        id:        'bass_line',
+        name:      'Bass Line',
+        icon:      '🎸',
+        start:     4,
+        end:       10,
+        focus:     'bass line groove, low-end movement',
+        exclude:   'no kick transient, no melody, no pads, no hi-hats, no vocals',
+        isolation: 'solo bass layer, clean low-end, mix-ready',
+      },
+      {
+        id:        'pads_chords',
+        name:      'Pads / Chords',
+        icon:      '🎹',
+        start:     10,
+        end:       22,
+        focus:     'harmonic pads, chord stabs, atmospheric texture',
+        exclude:   'no drums, no bass, no lead melody, no hi-hats, no vocals',
+        isolation: 'solo harmonic layer, lush chords, mix-ready',
+      },
+      {
+        id:        'lead_melody',
+        name:      'Lead / Melody',
+        icon:      '🎵',
+        start:     22,
+        end:       38,
+        focus:     'lead melody, melodic hook, main riff',
+        exclude:   'no drums, no bass, no pads, no hi-hats, no vocals',
+        isolation: 'solo lead melody, front-and-center, mix-ready',
+      },
+      {
+        id:        'hihats_air',
+        name:      'Hi-Hats / Air',
+        icon:      '🔔',
+        start:     38,
+        end:       64,
+        focus:     'crispy hi-hats, overhead cymbals, high-frequency air',
+        exclude:   'no kick, no bass, no melody, no chords, no vocals',
+        isolation: 'solo hi-hat and cymbal layer, bright air, mix-ready',
+      },
+    ];
+
+    // Shared context from the full analysis
+    const primaryGenre = (genres?.primary?.[0] || 'electronic').toLowerCase();
+    const secondGenre  = (genres?.primary?.[1] || '').toLowerCase();
+    const bpmVal       = bpm?.bpm || 128;
+    const keyVal       = key?.fullKey || 'A minor';
+    const mood         = moodProfile?.primary || '';
+    const moodTag      = mood ? mood.toLowerCase() : 'cinematic';
+
+    return stemDefs.map(def => {
+      // ── 1. Energy for this stem (0–1, normalised relative to full-spectrum max)
+      const rawEnergy = this._avgRange(bands, def.start, def.end);
+
+      // ── 2. Presence label
+      let presence;
+      if      (rawEnergy > 0.55) presence = 'Strong';
+      else if (rawEnergy > 0.25) presence = 'Present';
+      else                       presence = 'Subtle';
+
+      // ── 3. Characteristic tags per stem + shared context
+      const tags = this._buildStemTags(def.id, rawEnergy, characteristics, spectral, moodTag);
+
+      // ── 4. Suno v5.5 mini-prompt
+      const prompt = this._buildStemPrompt(def, {
+        primaryGenre,
+        secondGenre,
+        bpmVal,
+        keyVal,
+        moodTag,
+        presence,
+        tags,
+        characteristics,
+      });
+
+      return {
+        id:        def.id,
+        name:      def.name,
+        icon:      def.icon,
+        bandRange: [def.start, def.end],
+        energy:    Math.round(rawEnergy * 100),   // 0-100 for progress bar
+        presence,
+        tags,
+        prompt,
+      };
+    });
+  }
+
+  /**
+   * Build descriptive tags for a given stem based on spectral energy + characteristics.
+   */
+  _buildStemTags(stemId, energy, chars, spectral, moodTag) {
+    const tags = [];
+
+    switch (stemId) {
+      case 'kick_sub':
+        if (energy > 0.6)           tags.push('heavy sub');
+        if (chars.bassWeight > 65)  tags.push('808 dominant');
+        if (chars.hypnotic > 55)    tags.push('driving');
+        if (chars.darkness > 55)    tags.push('dark rumble');
+        if (energy < 0.3)           tags.push('minimal kick');
+        if (!tags.length)           tags.push('clean kick');
+        break;
+
+      case 'bass_line':
+        if (spectral.bass > 0.5)    tags.push('prominent bass');
+        if (chars.bassWeight > 60)  tags.push('heavy low-end');
+        if (chars.hypnotic > 60)    tags.push('rolling groove');
+        if (chars.complexity < 35)  tags.push('simple bassline');
+        else                        tags.push('moving bassline');
+        if (!tags.length)           tags.push('clean bass');
+        break;
+
+      case 'pads_chords':
+        if (chars.complexity > 60)  tags.push('layered pads');
+        if (chars.darkness > 60)    tags.push('dark chords');
+        if (chars.brightness > 55)  tags.push('bright chords');
+        if (moodTag === 'haunting' || moodTag === 'melancholic') tags.push('eerie pads');
+        if (chars.hypnotic > 55)    tags.push('hypnotic texture');
+        if (!tags.length)           tags.push('harmonic pads');
+        break;
+
+      case 'lead_melody':
+        if (spectral.mid > 0.5)     tags.push('strong lead');
+        if (chars.complexity > 65)  tags.push('complex melody');
+        if (chars.brightness > 60)  tags.push('bright lead');
+        if (chars.darkness > 60)    tags.push('dark riff');
+        if (energy < 0.25)          tags.push('subtle melody');
+        if (!tags.length)           tags.push('melodic hook');
+        break;
+
+      case 'hihats_air':
+        if (spectral.high > 0.5)    tags.push('crispy highs');
+        if (chars.brightness > 60)  tags.push('bright air');
+        if (energy < 0.2)           tags.push('minimal hats');
+        if (chars.complexity > 60)  tags.push('busy hi-hats');
+        if (!tags.length)           tags.push('clean hi-hats');
+        break;
+    }
+
+    // Dedupe
+    return [...new Set(tags)];
+  }
+
+  /**
+   * Build a Suno v5.5-formatted mini-prompt for a single stem layer.
+   * Format: Genre → BPM → Key → Focus → Mood → Exclude → Isolation language
+   */
+  _buildStemPrompt(def, ctx) {
+    const { primaryGenre, secondGenre, bpmVal, keyVal, moodTag, presence, tags, characteristics } = ctx;
+
+    // Genre line: max 2 genres for Suno v5.5
+    const genreParts = [primaryGenre];
+    if (secondGenre && secondGenre !== primaryGenre) genreParts.push(secondGenre);
+    const genreStr = genreParts.join(', ');
+
+    // Energy descriptor from presence
+    const energyDesc = {
+      Strong:  'powerful, full energy',
+      Present: 'balanced, controlled energy',
+      Subtle:  'restrained, sparse energy',
+    }[presence] || 'balanced energy';
+
+    // Assemble parts
+    const parts = [
+      genreStr,
+      `${bpmVal} BPM`,
+      keyVal,
+      def.focus,
+      moodTag,
+      energyDesc,
+    ];
+
+    if (tags.length) parts.push(tags.join(', '));
+
+    // Exclusion language — tells Suno what NOT to generate
+    parts.push(def.exclude);
+
+    // Isolation cue — critical to get a stem-like output
+    parts.push(def.isolation);
+
+    // Always instrumental for stem generation
+    parts.push('instrumental');
+
+    let prompt = parts.join(', ');
+
+    // v5.5 cap: 1000 chars
+    if (prompt.length > 1000) {
+      const allParts = prompt.split(',').map(s => s.trim());
+      let trimmed = '';
+      for (const p of allParts) {
+        const candidate = trimmed ? trimmed + ', ' + p : p;
+        if (candidate.length > 1000) break;
+        trimmed = candidate;
+      }
+      prompt = trimmed;
+    }
+
+    return prompt;
+  }
 }
 
 window.AudioAnalyzer = AudioAnalyzer;
