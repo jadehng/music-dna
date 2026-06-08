@@ -25,26 +25,31 @@ function getYtdl() {
   return ytdl;
 }
 
-// Build an authenticated agent from cookies stored in the YOUTUBE_COOKIES env var.
+// Build an authenticated agent from cookies stored in Netlify Blobs.
 // YouTube blocks datacenter IPs (Netlify/AWS) with "Sign in to confirm you're not
 // a bot"; presenting a logged-in account's cookies makes requests look authenticated
-// and defeats that check. The env var holds the JSON array exported by a browser
-// cookie extension (e.g. "EditThisCookie" / "Get cookies.txt" → JSON). Cached across
-// warm invocations. Returns null if not configured (callers then run cookie-less).
+// and defeats that check. The cookies are a JSON array exported by a browser cookie
+// extension (e.g. "Get cookies.txt LOCALLY" → JSON), written to the 'youtube-secrets'
+// blob store under key 'cookies'. We use Blobs rather than an env var because the
+// full cookie set (~6.5KB) blows past AWS Lambda's 4KB *total* env-var limit, which
+// blocks the whole function from deploying. Cached across warm invocations. Returns
+// null if not configured (callers then run cookie-less).
 let cachedAgent;
-function getAgent(lib) {
+async function getAgent(lib) {
   if (cachedAgent !== undefined) return cachedAgent;
   cachedAgent = null;
-  const raw = process.env.YOUTUBE_COOKIES;
-  if (raw && typeof lib.createAgent === 'function') {
-    try {
-      const cookies = JSON.parse(raw);
-      if (Array.isArray(cookies) && cookies.length) {
-        cachedAgent = lib.createAgent(cookies);
-      }
-    } catch (e) {
-      console.warn('YOUTUBE_COOKIES is set but not valid JSON cookie array:', e.message);
+  if (typeof lib.createAgent !== 'function') return cachedAgent;
+  try {
+    const { getStore } = require('@netlify/blobs');
+    const store = getStore('youtube-secrets');
+    const cookies = await store.get('cookies', { type: 'json' });
+    if (Array.isArray(cookies) && cookies.length) {
+      cachedAgent = lib.createAgent(cookies);
+    } else {
+      console.warn('youtube-secrets/cookies blob missing or not a cookie array');
     }
+  } catch (e) {
+    console.warn('could not load YouTube cookies from Blobs:', e.message);
   }
   return cachedAgent;
 }
@@ -149,7 +154,7 @@ async function extractWithYtdlCore(url) {
   const lib = getYtdl();
   if (!lib) throw new Error('ytdl-core not available');
 
-  const agent = getAgent(lib);
+  const agent = await getAgent(lib);
   const reqOpts = agent ? { agent } : {};
 
   const info = await lib.getInfo(url, reqOpts);
@@ -247,7 +252,7 @@ exports.handler = async (event) => {
       body: JSON.stringify({
         error: 'Extraction failed: ' + (error.stderr || error.message || '').split('\n')[0],
         hint: /sign in|not a bot|confirm/i.test(error.message || '')
-          ? 'YouTube demande une connexion (anti-bot). Configure les cookies YOUTUBE_COOKIES sur Netlify, ou télécharge le MP3 et utilise l\'upload de fichier.'
+          ? 'YouTube demande une connexion (anti-bot). Les cookies du compte partagé ont peut-être expiré — sinon, télécharge le MP3 et utilise l\'upload de fichier.'
           : 'YouTube bloque parfois les serveurs (datacenter). Réessaie, ou télécharge le MP3 et utilise l\'upload de fichier.'
       })
     };
