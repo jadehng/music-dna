@@ -299,6 +299,7 @@ class AudioEditor {
           track.offset = this._parseTimeInput(offsetInput.value);
           offsetInput.value = this._formatTimeInput(track.offset);
           this._updateTotalTime();
+          this._renderOverlayTimeline();
           this._scheduleSave();
         });
         offsetInput.addEventListener('keydown', (e) => {
@@ -356,6 +357,99 @@ class AudioEditor {
 
       // Trim handles
       this._setupTrimHandles(el, track);
+    });
+
+    this._renderOverlayTimeline();
+  }
+
+  // ─── Shared mix timeline (Superposition mode) ───
+  // One common time ruler where each track is a block you drag left/right
+  // to place it in the mix. Fit-to-width: the whole mix always fits on screen.
+  _renderOverlayTimeline() {
+    const container = document.getElementById('overlayTimeline');
+    if (!container) return;
+
+    if (this.mixMode !== 'overlay' || this.tracks.length === 0) {
+      container.classList.add('hidden');
+      container.innerHTML = '';
+      return;
+    }
+    container.classList.remove('hidden');
+
+    const palette = ['#7c3aed', '#2563eb', '#059669', '#d97706', '#db2777', '#0891b2', '#65a30d', '#dc2626'];
+    const totalDur = Math.max(
+      ...this.tracks.map(t => (t.offset || 0) + (t.endTrim - t.startTrim)), 1
+    );
+
+    container.innerHTML = `
+      <div class="otl-header">
+        <span class="otl-title">Timeline du mix — glisse les morceaux pour les placer</span>
+        <span class="otl-total">${this._formatTime(totalDur)}</span>
+      </div>
+      <div class="otl-rows" id="otlRows"></div>
+      <div class="otl-playhead" id="otlPlayhead"></div>
+    `;
+
+    const rows = container.querySelector('#otlRows');
+    const widthPx = rows.clientWidth || container.clientWidth || 600;
+    const pxPerSec = widthPx / totalDur;
+    this._otlPxPerSec = pxPerSec;
+    this._otlWidthPx = widthPx;
+
+    this.tracks.forEach((track, i) => {
+      const trimDur = track.endTrim - track.startTrim;
+      const row = document.createElement('div');
+      row.className = 'otl-row';
+
+      const block = document.createElement('div');
+      block.className = 'otl-block';
+      block.dataset.track = track.id;
+      block.style.left = ((track.offset || 0) * pxPerSec) + 'px';
+      block.style.width = Math.max(trimDur * pxPerSec, 8) + 'px';
+      block.style.background = palette[i % palette.length];
+      block.innerHTML = `<span class="otl-label">${track.name}</span><span class="otl-start">${this._formatTime(track.offset || 0)}</span>`;
+      block.title = `${track.name} — démarre à ${this._formatTime(track.offset || 0)}`;
+
+      row.appendChild(block);
+      rows.appendChild(row);
+
+      this._setupBlockDrag(block, track, container);
+    });
+  }
+
+  _setupBlockDrag(block, track, container) {
+    block.addEventListener('mousedown', (e) => {
+      e.preventDefault();
+      const pxPerSec = this._otlPxPerSec || 1;
+      const maxLeft = this._otlWidthPx - block.offsetWidth;
+      const startX = e.clientX;
+      const startOffset = track.offset || 0;
+      block.classList.add('dragging');
+
+      const onMove = (ev) => {
+        const dx = ev.clientX - startX;
+        let newLeftPx = Math.max(0, Math.min((startOffset * pxPerSec) + dx, maxLeft));
+        const newOffset = Math.max(0, newLeftPx / pxPerSec);
+        track.offset = newOffset;
+        block.style.left = newLeftPx + 'px';
+        const startLabel = block.querySelector('.otl-start');
+        if (startLabel) startLabel.textContent = this._formatTime(newOffset);
+        // Keep the per-track "Début à" input in sync
+        const offsetInput = document.querySelector(`.track-offset-input[data-track="${track.id}"]`);
+        if (offsetInput) offsetInput.value = this._formatTimeInput(newOffset);
+        this._updateTotalTime();
+      };
+
+      const onUp = () => {
+        document.removeEventListener('mousemove', onMove);
+        document.removeEventListener('mouseup', onUp);
+        block.classList.remove('dragging');
+        this._scheduleSave();
+        this._renderOverlayTimeline(); // rescale to new total length
+      };
+
+      document.addEventListener('mousemove', onMove);
+      document.addEventListener('mouseup', onUp);
     });
   }
 
@@ -844,6 +938,17 @@ class AudioEditor {
         timeDisplay.textContent = this._formatTime(Math.max(0, elapsed)) + ' / ' + this._formatTime(maxEnd);
       }
 
+      // Shared timeline playhead
+      const otlPlayhead = document.getElementById('otlPlayhead');
+      if (otlPlayhead && this._otlPxPerSec) {
+        if (elapsed >= 0 && elapsed <= maxEnd) {
+          otlPlayhead.style.display = 'block';
+          otlPlayhead.style.left = (elapsed * this._otlPxPerSec) + 'px';
+        } else {
+          otlPlayhead.style.display = 'none';
+        }
+      }
+
       // Move a playhead on every track that is currently sounding
       this._liveNodes.forEach(({ track }) => {
         const offset = track.offset || 0;
@@ -922,6 +1027,8 @@ class AudioEditor {
     // Hide all playheads + time display + reset buttons
     document.querySelectorAll('.track-playhead').forEach(p => p.classList.remove('active'));
     document.querySelectorAll('.track-play-btn').forEach(btn => btn.innerHTML = '&#9654;');
+    const otlPlayhead = document.getElementById('otlPlayhead');
+    if (otlPlayhead) otlPlayhead.style.display = 'none';
     const timeDisplay = document.getElementById('editorPlaybackTime');
     if (timeDisplay) timeDisplay.style.display = 'none';
     document.getElementById('playIcon').textContent = '▶';

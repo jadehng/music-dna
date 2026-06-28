@@ -698,6 +698,74 @@ header h1 { font-size: 2.5rem; font-weight: 700; letter-spacing: -0.02em; margin
   border-color: var(--accent);
 }
 
+/* ─── Shared mix timeline (Superposition) ─── */
+.overlay-timeline {
+  position: relative;
+  margin: 0 0 1rem;
+  padding: 0.6rem 0.75rem 0.75rem;
+  border: 1px solid var(--border, #333);
+  border-radius: 8px;
+  background: rgba(124, 58, 237, 0.04);
+}
+.overlay-timeline.hidden { display: none; }
+.otl-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 0.5rem;
+}
+.otl-title { font-size: 0.78rem; color: var(--text-dim); }
+.otl-total { font-family: var(--mono); font-size: 0.78rem; color: var(--accent); }
+.otl-rows { position: relative; }
+.otl-row {
+  position: relative;
+  height: 30px;
+  margin-bottom: 4px;
+  background: rgba(180,180,190,0.08);
+  border-radius: 4px;
+}
+.otl-block {
+  position: absolute;
+  top: 3px;
+  height: 24px;
+  border-radius: 4px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 6px;
+  padding: 0 7px;
+  cursor: grab;
+  overflow: hidden;
+  white-space: nowrap;
+  box-shadow: 0 1px 3px rgba(0,0,0,0.25);
+  user-select: none;
+}
+.otl-block:hover { filter: brightness(1.1); }
+.otl-block.dragging { cursor: grabbing; filter: brightness(1.15); z-index: 5; }
+.otl-label {
+  font-size: 0.72rem;
+  color: #fff;
+  font-weight: 600;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.otl-start {
+  font-family: var(--mono);
+  font-size: 0.65rem;
+  color: rgba(255,255,255,0.85);
+  flex-shrink: 0;
+}
+.otl-playhead {
+  position: absolute;
+  top: 32px;
+  bottom: 6px;
+  width: 2px;
+  background: #fff;
+  box-shadow: 0 0 4px rgba(255,255,255,0.8);
+  display: none;
+  pointer-events: none;
+}
+
 /* Track audio process buttons */
 .track-process {
   display: flex;
