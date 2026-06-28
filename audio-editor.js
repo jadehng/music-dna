@@ -20,6 +20,9 @@ class AudioEditor {
     this.selectionTrackId = null;
     this.selectionStart = null; // seconds
     this.selectionEnd = null;   // seconds
+    // Auto-save state
+    this._dbName = 'musicDnaEditor';
+    this._saveTimer = null;
   }
 
   init() {
@@ -27,6 +30,9 @@ class AudioEditor {
     this._setupDropZone();
     this._setupControls();
     this._setupExport();
+    this._setupProjectActions();
+    // Restore a previous session if one exists
+    this._restoreProject().catch(err => console.warn('Restore failed:', err));
   }
 
   // ─── File Import ───
@@ -83,8 +89,10 @@ class AudioEditor {
           endTrim: buffer.duration,
           volume: 1.0,
           muted: false,
+          solo: false,
           type: isVideo ? 'video' : 'audio',
-          offset: 0 // start position in the mix (overlay mode), in seconds
+          offset: 0, // start position in the mix (overlay mode), in seconds
+          _dirty: true // needs its audio written on next save
         };
 
         this.tracks.push(track);
@@ -96,6 +104,7 @@ class AudioEditor {
 
     this._renderTimeline();
     this._updateControls();
+    this._scheduleSave();
   }
 
   // Extract audio track from a video file
@@ -258,6 +267,7 @@ class AudioEditor {
         track.volume = parseInt(volSlider.value) / 100;
         volVal.textContent = volSlider.value + '%';
         this._refreshLiveGains();
+        this._scheduleSave();
       });
 
       // Mute toggle
@@ -267,6 +277,7 @@ class AudioEditor {
         muteIcon.innerHTML = track.muted ? '&#128263;' : '&#128266;';
         volSlider.style.opacity = track.muted ? '0.4' : '1';
         this._refreshLiveGains();
+        this._scheduleSave();
       });
 
       // Solo toggle — isolate this track in the live mix
@@ -277,6 +288,7 @@ class AudioEditor {
           el.querySelectorAll('.track-solo-btn').forEach(() => {});
           this._renderSoloStates();
           this._refreshLiveGains();
+          this._scheduleSave();
         });
       }
 
@@ -287,6 +299,7 @@ class AudioEditor {
           track.offset = this._parseTimeInput(offsetInput.value);
           offsetInput.value = this._formatTimeInput(track.offset);
           this._updateTotalTime();
+          this._scheduleSave();
         });
         offsetInput.addEventListener('keydown', (e) => {
           if (e.key === 'Enter') {
@@ -430,7 +443,9 @@ class AudioEditor {
         this._updateTotalTime();
       });
 
-      document.addEventListener('mouseup', () => { isDragging = false; });
+      document.addEventListener('mouseup', () => {
+        if (isDragging) { isDragging = false; this._scheduleSave(); }
+      });
     };
 
     makeDraggable(leftHandle, true);
@@ -442,6 +457,7 @@ class AudioEditor {
     this.tracks = this.tracks.filter(t => t.id !== id);
     this._renderTimeline();
     this._updateControls();
+    this._scheduleSave();
   }
 
   _reorderTrack(fromId, toId) {
@@ -452,6 +468,7 @@ class AudioEditor {
     const [moved] = this.tracks.splice(fromIdx, 1);
     this.tracks.splice(toIdx, 0, moved);
     this._renderTimeline();
+    this._scheduleSave();
   }
 
   _playTrack(track, trackEl) {
@@ -582,8 +599,10 @@ class AudioEditor {
 
     // Adjust endTrim if needed
     track.endTrim = Math.min(track.endTrim, track.buffer.duration);
+    track._dirty = true;
     this._renderTimeline();
     this._updateControls();
+    this._scheduleSave();
   }
 
   _toast(msg) {
@@ -619,6 +638,7 @@ class AudioEditor {
         // Re-render to show/hide offset inputs
         this._renderTimeline();
         this._updateTotalTime();
+        this._scheduleSave();
       });
     });
 
@@ -636,6 +656,7 @@ class AudioEditor {
       el.addEventListener('input', () => {
         valueEl.textContent = el.value + 's';
         this._updateTotalTime();
+        this._scheduleSave();
       });
     });
   }
@@ -1019,10 +1040,12 @@ class AudioEditor {
     }
     track.endTrim = Math.min(track.endTrim, newBuffer.duration);
     track.startTrim = Math.min(track.startTrim, track.endTrim);
+    track._dirty = true;
 
     this._clearSelection();
     this._renderTimeline();
     this._updateControls();
+    this._scheduleSave();
   }
 
   _duplicateSelection(trackId) {
@@ -1054,7 +1077,8 @@ class AudioEditor {
       muted: false,
       solo: false,
       type: track.type || 'audio',
-      offset: 0
+      offset: 0,
+      _dirty: true
     };
 
     // Insert right after the source track
@@ -1064,6 +1088,7 @@ class AudioEditor {
     this._clearSelection();
     this._renderTimeline();
     this._updateControls();
+    this._scheduleSave();
   }
 
   // ─── Merge Buffers ───
@@ -1365,6 +1390,207 @@ class AudioEditor {
       int16[i] = s < 0 ? s * 0x8000 : s * 0x7FFF;
     }
     return int16;
+  }
+
+  // ─── Auto-save (IndexedDB) ───
+  // The whole editing session (audio + every setting) is saved to the browser
+  // so a refresh or accidental close never loses your work.
+  _openDB() {
+    return new Promise((resolve, reject) => {
+      const req = indexedDB.open(this._dbName, 1);
+      req.onupgradeneeded = () => {
+        const db = req.result;
+        if (!db.objectStoreNames.contains('audio')) db.createObjectStore('audio');
+        if (!db.objectStoreNames.contains('meta')) db.createObjectStore('meta');
+      };
+      req.onsuccess = () => resolve(req.result);
+      req.onerror = () => reject(req.error);
+    });
+  }
+
+  _idbPut(store, key, value) {
+    return new Promise((resolve, reject) => {
+      const tx = store.transaction;
+      store.put(value, key);
+      tx.oncomplete = () => resolve();
+      tx.onerror = () => reject(tx.error);
+    });
+  }
+
+  // Schedule a debounced save after any change
+  _scheduleSave() {
+    this._setSaveStatus('saving');
+    clearTimeout(this._saveTimer);
+    this._saveTimer = setTimeout(() => {
+      this._saveProject().catch(err => {
+        console.warn('Save failed:', err);
+        this._setSaveStatus('error');
+      });
+    }, 900);
+  }
+
+  async _saveProject() {
+    const db = await this._openDB();
+
+    // Settings (cheap, always written)
+    const settings = {
+      mixMode: this.mixMode,
+      trackIdCounter: this.trackIdCounter,
+      fadeIn: this._ctrlVal('fadeIn'),
+      fadeOut: this._ctrlVal('fadeOut'),
+      gap: this._ctrlVal('gapDuration'),
+      crossfade: this._ctrlVal('crossfadeDuration'),
+      tracks: this.tracks.map(t => ({
+        id: t.id, name: t.name, type: t.type || 'audio',
+        startTrim: t.startTrim, endTrim: t.endTrim,
+        volume: t.volume != null ? t.volume : 1.0,
+        muted: !!t.muted, solo: !!t.solo, offset: t.offset || 0
+      }))
+    };
+
+    // Write audio blobs only for tracks whose buffer changed since last save
+    const audioTx = db.transaction('audio', 'readwrite');
+    const audioStore = audioTx.objectStore('audio');
+    const liveIds = new Set(this.tracks.map(t => String(t.id)));
+    for (const t of this.tracks) {
+      if (t._dirty || t._dirty === undefined) {
+        const wav = this._bufferToWav(t.buffer);
+        audioStore.put(wav, String(t.id));
+        t._dirty = false;
+      }
+    }
+    // Drop audio for deleted tracks
+    const keysReq = audioStore.getAllKeys();
+    await new Promise(res => {
+      keysReq.onsuccess = () => {
+        keysReq.result.forEach(k => { if (!liveIds.has(String(k))) audioStore.delete(k); });
+        res();
+      };
+      keysReq.onerror = () => res();
+    });
+    await new Promise(res => { audioTx.oncomplete = res; audioTx.onerror = res; });
+
+    const metaTx = db.transaction('meta', 'readwrite');
+    metaTx.objectStore('meta').put(settings, 'settings');
+    await new Promise(res => { metaTx.oncomplete = res; metaTx.onerror = res; });
+
+    this._setSaveStatus('saved');
+  }
+
+  async _restoreProject() {
+    const db = await this._openDB();
+    const metaTx = db.transaction('meta', 'readonly');
+    const settings = await new Promise((res, rej) => {
+      const r = metaTx.objectStore('meta').get('settings');
+      r.onsuccess = () => res(r.result);
+      r.onerror = () => rej(r.error);
+    });
+    if (!settings || !settings.tracks || settings.tracks.length === 0) return false;
+
+    const audioTx = db.transaction('audio', 'readonly');
+    const audioStore = audioTx.objectStore('audio');
+
+    for (const st of settings.tracks) {
+      const blob = await new Promise(res => {
+        const r = audioStore.get(String(st.id));
+        r.onsuccess = () => res(r.result);
+        r.onerror = () => res(null);
+      });
+      if (!blob) continue;
+      try {
+        const arrayBuffer = await blob.arrayBuffer();
+        const buffer = await this.audioContext.decodeAudioData(arrayBuffer);
+        this.tracks.push({
+          id: st.id, name: st.name, file: null, buffer,
+          startTrim: Math.min(st.startTrim, buffer.duration),
+          endTrim: Math.min(st.endTrim, buffer.duration),
+          volume: st.volume, muted: st.muted, solo: st.solo,
+          type: st.type, offset: st.offset, _dirty: false
+        });
+      } catch (e) {
+        console.warn('Could not decode saved track', st.name, e);
+      }
+    }
+
+    if (this.tracks.length === 0) return false;
+
+    this.trackIdCounter = settings.trackIdCounter || (Math.max(...this.tracks.map(t => t.id)) + 1);
+    this.mixMode = settings.mixMode || 'sequence';
+
+    // Restore control values + their labels
+    this._setCtrl('fadeIn', settings.fadeIn, 'fadeInValue');
+    this._setCtrl('fadeOut', settings.fadeOut, 'fadeOutValue');
+    this._setCtrl('gapDuration', settings.gap, 'gapValue');
+    this._setCtrl('crossfadeDuration', settings.crossfade, 'crossfadeValue');
+
+    // Restore mix-mode button state + mode-specific controls
+    document.querySelectorAll('.mix-mode-btn').forEach(b => {
+      b.classList.toggle('active', b.dataset.mode === this.mixMode);
+    });
+    const seqControls = document.getElementById('sequenceControls');
+    if (seqControls) seqControls.style.display = this.mixMode === 'sequence' ? 'flex' : 'none';
+    const overlayHint = document.getElementById('overlayHint');
+    if (overlayHint) overlayHint.style.display = this.mixMode === 'overlay' ? 'flex' : 'none';
+
+    this._renderTimeline();
+    this._updateControls();
+    this._setSaveStatus('saved');
+    this._toast('Projet précédent restauré');
+    return true;
+  }
+
+  async _clearProject() {
+    this._stopPlayback();
+    this.tracks = [];
+    this.trackIdCounter = 0;
+    try {
+      const db = await this._openDB();
+      ['audio', 'meta'].forEach(name => {
+        const tx = db.transaction(name, 'readwrite');
+        tx.objectStore(name).clear();
+      });
+    } catch (e) { /* ignore */ }
+    this._renderTimeline();
+    this._updateControls();
+    this._setSaveStatus('idle');
+  }
+
+  _setupProjectActions() {
+    const newBtn = document.getElementById('editorNewProject');
+    if (newBtn) {
+      newBtn.addEventListener('click', () => {
+        if (this.tracks.length === 0 || confirm('Effacer le projet actuel et tout recommencer ?')) {
+          this._clearProject();
+        }
+      });
+    }
+  }
+
+  _setSaveStatus(state) {
+    const el = document.getElementById('editorSaveStatus');
+    if (!el) return;
+    const map = {
+      idle: '',
+      saving: 'Sauvegarde…',
+      saved: '✓ Sauvegardé',
+      error: '⚠ Sauvegarde impossible'
+    };
+    el.textContent = map[state] || '';
+    el.style.color = state === 'error' ? '#e66' : 'var(--text-dim)';
+  }
+
+  _ctrlVal(id) {
+    const el = document.getElementById(id);
+    return el ? parseFloat(el.value) || 0 : 0;
+  }
+
+  _setCtrl(id, value, labelId) {
+    const el = document.getElementById(id);
+    if (el && value != null) {
+      el.value = value;
+      const label = document.getElementById(labelId);
+      if (label) label.textContent = value + 's';
+    }
   }
 
   _formatTime(seconds) {
