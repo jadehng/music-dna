@@ -213,6 +213,7 @@ class AudioEditor {
           <span class="vol-icon" data-track="${track.id}" title="Mute/Unmute">${track.muted ? '&#128263;' : '&#128266;'}</span>
           <input type="range" class="track-vol-slider" data-track="${track.id}" min="0" max="150" value="${volPct}" title="Volume: ${volPct}%">
           <span class="vol-val" data-track="${track.id}">${volPct}%</span>
+          <button class="btn btn-sm track-solo-btn ${track.solo ? 'solo-active' : ''}" data-track="${track.id}" title="Solo : n'entendre que cette piste">S</button>
         </div>
         <div class="track-process">
           ${isStereo ? `
@@ -256,6 +257,7 @@ class AudioEditor {
       volSlider.addEventListener('input', () => {
         track.volume = parseInt(volSlider.value) / 100;
         volVal.textContent = volSlider.value + '%';
+        this._refreshLiveGains();
       });
 
       // Mute toggle
@@ -264,7 +266,19 @@ class AudioEditor {
         track.muted = !track.muted;
         muteIcon.innerHTML = track.muted ? '&#128263;' : '&#128266;';
         volSlider.style.opacity = track.muted ? '0.4' : '1';
+        this._refreshLiveGains();
       });
+
+      // Solo toggle — isolate this track in the live mix
+      const soloBtn = el.querySelector('.track-solo-btn');
+      if (soloBtn) {
+        soloBtn.addEventListener('click', () => {
+          track.solo = !track.solo;
+          el.querySelectorAll('.track-solo-btn').forEach(() => {});
+          this._renderSoloStates();
+          this._refreshLiveGains();
+        });
+      }
 
       // Offset input (overlay mode)
       const offsetInput = el.querySelector('.track-offset-input');
@@ -598,6 +612,10 @@ class AudioEditor {
         // Show/hide sequence-specific controls
         const seqControls = document.getElementById('sequenceControls');
         if (seqControls) seqControls.style.display = this.mixMode === 'sequence' ? 'flex' : 'none';
+        const overlayHint = document.getElementById('overlayHint');
+        if (overlayHint) overlayHint.style.display = this.mixMode === 'overlay' ? 'flex' : 'none';
+        // Switching mode stops any live playback (nodes are mode-specific)
+        this._stopPlayback();
         // Re-render to show/hide offset inputs
         this._renderTimeline();
         this._updateTotalTime();
@@ -650,6 +668,13 @@ class AudioEditor {
   async _playAll() {
     this._stopPlayback();
     if (this.tracks.length === 0) return;
+
+    // Overlay mode uses LIVE playback: one source + gain per track, so volume,
+    // mute and solo can be adjusted in real time and each track shows its own playhead.
+    if (this.mixMode === 'overlay') {
+      this._playAllLiveOverlay();
+      return;
+    }
 
     this._playSession = (this._playSession || 0) + 1;
     const session = this._playSession;
@@ -747,9 +772,120 @@ class AudioEditor {
     };
   }
 
+  // Overlay LIVE playback — all tracks play at once through their own gain nodes.
+  // Volume / mute / solo changes are applied to the live gain nodes instantly.
+  _playAllLiveOverlay() {
+    if (this.audioContext.state === 'suspended') this.audioContext.resume();
+
+    this._playSession = (this._playSession || 0) + 1;
+    const session = this._playSession;
+
+    const startAt = this.audioContext.currentTime + 0.05; // small lead-in for tight sync
+    this._liveStartAt = startAt;
+    this._liveNodes = [];
+
+    let maxEnd = 0;
+
+    this.tracks.forEach(track => {
+      const trimDur = track.endTrim - track.startTrim;
+      if (trimDur < 0.02) return;
+      const offset = track.offset || 0;
+
+      const source = this.audioContext.createBufferSource();
+      source.buffer = track.buffer;
+      const gain = this.audioContext.createGain();
+      gain.gain.value = this._effectiveGain(track);
+      source.connect(gain);
+      gain.connect(this.audioContext.destination);
+      source.start(startAt + offset, track.startTrim, trimDur);
+
+      track._liveGain = gain;
+      track._liveSource = source;
+      this._liveNodes.push({ track, source, gain });
+
+      maxEnd = Math.max(maxEnd, offset + trimDur);
+    });
+
+    if (this._liveNodes.length === 0) return;
+
+    this.isPlaying = true;
+    this.playingTrackId = '__all__';
+    document.getElementById('playIcon').textContent = '⏸';
+
+    const timeDisplay = document.getElementById('editorPlaybackTime');
+    if (timeDisplay) { timeDisplay.style.display = 'inline'; timeDisplay.textContent = '0:00'; }
+
+    const animate = () => {
+      if (this._playSession !== session) return;
+      const elapsed = this.audioContext.currentTime - startAt;
+
+      if (timeDisplay) {
+        timeDisplay.textContent = this._formatTime(Math.max(0, elapsed)) + ' / ' + this._formatTime(maxEnd);
+      }
+
+      // Move a playhead on every track that is currently sounding
+      this._liveNodes.forEach(({ track }) => {
+        const offset = track.offset || 0;
+        const trimDur = track.endTrim - track.startTrim;
+        const playhead = document.querySelector(`.track-playhead[data-track="${track.id}"]`);
+        if (!playhead) return;
+        const local = elapsed - offset;
+        if (local >= 0 && local <= trimDur) {
+          const pct = (track.startTrim + local) / track.buffer.duration;
+          playhead.classList.add('active');
+          playhead.style.left = (pct * 100) + '%';
+        } else {
+          playhead.classList.remove('active');
+        }
+      });
+
+      if (elapsed < maxEnd) {
+        this.playheadRAF = requestAnimationFrame(animate);
+      } else {
+        this._stopPlayback();
+      }
+    };
+    this.playheadRAF = requestAnimationFrame(animate);
+  }
+
+  // Gain for a track given mute + solo state across the whole project
+  _effectiveGain(track) {
+    const anySolo = this.tracks.some(t => t.solo);
+    if (track.muted) return 0;
+    if (anySolo && !track.solo) return 0;
+    return track.volume != null ? track.volume : 1.0;
+  }
+
+  // Push current volume/mute/solo to live gain nodes (called during live playback)
+  _refreshLiveGains() {
+    if (!this._liveNodes) return;
+    const now = this.audioContext.currentTime;
+    this._liveNodes.forEach(({ track, gain }) => {
+      gain.gain.setTargetAtTime(this._effectiveGain(track), now, 0.015);
+    });
+  }
+
+  // Sync solo button highlight to track state without a full re-render
+  _renderSoloStates() {
+    this.tracks.forEach(t => {
+      const btn = document.querySelector(`.track-solo-btn[data-track="${t.id}"]`);
+      if (btn) btn.classList.toggle('solo-active', !!t.solo);
+    });
+  }
+
   _stopPlayback() {
     // Kill session so any running animation/onended callback stops
     this._playSession = (this._playSession || 0) + 1;
+
+    // Stop live overlay nodes if any
+    if (this._liveNodes) {
+      this._liveNodes.forEach(({ track, source }) => {
+        try { source.stop(); } catch (e) {}
+        track._liveGain = null;
+        track._liveSource = null;
+      });
+      this._liveNodes = null;
+    }
 
     if (this.currentSource) {
       this.currentSource.onended = null;
@@ -914,7 +1050,11 @@ class AudioEditor {
       buffer: newBuffer,
       startTrim: 0,
       endTrim: newBuffer.duration,
-      volume: 1.0
+      volume: 1.0,
+      muted: false,
+      solo: false,
+      type: track.type || 'audio',
+      offset: 0
     };
 
     // Insert right after the source track
@@ -932,8 +1072,9 @@ class AudioEditor {
     const fadeInSec = parseFloat(document.getElementById('fadeIn').value) || 0;
     const fadeOutSec = parseFloat(document.getElementById('fadeOut').value) || 0;
 
-    // Filter out muted tracks
-    const activeTracks = this.tracks.filter(t => !t.muted);
+    // Filter out muted tracks; if any track is soloed, only soloed tracks play
+    const anySolo = this.tracks.some(t => t.solo);
+    const activeTracks = this.tracks.filter(t => !t.muted && (!anySolo || t.solo));
     if (activeTracks.length === 0) {
       return this.audioContext.createBuffer(1, sampleRate, sampleRate); // 1s silence
     }

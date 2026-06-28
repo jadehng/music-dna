@@ -448,6 +448,12 @@
             </div>
           </div>
 
+          <div class="editor-controls-row" id="overlayHint" style="display:none;">
+            <p class="small" style="color:var(--text-dim);margin:0;">
+              💡 Clique « Écouter tout » puis ajuste les volumes, le mute ou le <strong>S</strong> (solo) en direct — tu entends le mix changer en temps réel. « Début à » place chaque morceau au moment voulu dans le mix.
+            </p>
+          </div>
+
           <div class="editor-controls-row" id="sequenceControls">
             <div class="editor-field">
               <label>Crossfade entre morceaux</label>
@@ -467,14 +473,14 @@
 
           <div class="editor-controls-row">
             <div class="editor-field">
-              <label>Fade-in global</label>
+              <label>Fade-in : montée du son au début</label>
               <div class="range-row">
                 <input type="range" id="fadeIn" min="0" max="10" step="0.5" value="0">
                 <span id="fadeInValue">0s</span>
               </div>
             </div>
             <div class="editor-field">
-              <label>Fade-out global</label>
+              <label>Fade-out : descente du son à la fin</label>
               <div class="range-row">
                 <input type="range" id="fadeOut" min="0" max="10" step="0.5" value="0">
                 <span id="fadeOutValue">0s</span>
