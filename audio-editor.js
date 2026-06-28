@@ -364,7 +364,7 @@ class AudioEditor {
 
   // ─── Shared mix timeline (Superposition mode) ───
   // One common time ruler where each track is a block you drag left/right
-  // to place it in the mix. Fit-to-width: the whole mix always fits on screen.
+  // to place it in the mix. Fixed zoom (constant px/second) with horizontal scroll.
   _renderOverlayTimeline() {
     const container = document.getElementById('overlayTimeline');
     if (!container) return;
@@ -381,20 +381,41 @@ class AudioEditor {
       ...this.tracks.map(t => (t.offset || 0) + (t.endTrim - t.startTrim)), 1
     );
 
+    // Fixed zoom: every second takes a constant width; scroll horizontally for
+    // longer mixes. Gives precise placement and a consistent time scale.
+    const PX_PER_SEC = 55;
+    // Pad the content a little past the end so the last block can still be dragged right
+    const contentWidth = Math.ceil((totalDur + 4) * PX_PER_SEC);
+
     container.innerHTML = `
       <div class="otl-header">
         <span class="otl-title">Timeline du mix — glisse les morceaux pour les placer</span>
         <span class="otl-total">${this._formatTime(totalDur)}</span>
       </div>
-      <div class="otl-rows" id="otlRows"></div>
-      <div class="otl-playhead" id="otlPlayhead"></div>
+      <div class="otl-scroll" id="otlScroll">
+        <div class="otl-ruler" id="otlRuler" style="width:${contentWidth}px"></div>
+        <div class="otl-rows" id="otlRows" style="width:${contentWidth}px">
+          <div class="otl-playhead" id="otlPlayhead"></div>
+        </div>
+      </div>
     `;
 
+    this._otlPxPerSec = PX_PER_SEC;
+    this._otlWidthPx = contentWidth;
+
+    // Second markers on the ruler (every 5s, or every 1s when short)
+    const ruler = container.querySelector('#otlRuler');
+    const stepSec = totalDur <= 20 ? 1 : 5;
+    for (let s = 0; s <= totalDur + 4; s += stepSec) {
+      const tick = document.createElement('span');
+      tick.className = 'otl-tick';
+      tick.style.left = (s * PX_PER_SEC) + 'px';
+      tick.textContent = this._formatTime(s);
+      ruler.appendChild(tick);
+    }
+
     const rows = container.querySelector('#otlRows');
-    const widthPx = rows.clientWidth || container.clientWidth || 600;
-    const pxPerSec = widthPx / totalDur;
-    this._otlPxPerSec = pxPerSec;
-    this._otlWidthPx = widthPx;
+    const pxPerSec = PX_PER_SEC;
 
     this.tracks.forEach((track, i) => {
       const trimDur = track.endTrim - track.startTrim;
@@ -942,8 +963,14 @@ class AudioEditor {
       const otlPlayhead = document.getElementById('otlPlayhead');
       if (otlPlayhead && this._otlPxPerSec) {
         if (elapsed >= 0 && elapsed <= maxEnd) {
+          const px = elapsed * this._otlPxPerSec;
           otlPlayhead.style.display = 'block';
-          otlPlayhead.style.left = (elapsed * this._otlPxPerSec) + 'px';
+          otlPlayhead.style.left = px + 'px';
+          // Keep the playhead in view as the mix scrolls past the viewport
+          const scroll = document.getElementById('otlScroll');
+          if (scroll && (px < scroll.scrollLeft || px > scroll.scrollLeft + scroll.clientWidth - 40)) {
+            scroll.scrollLeft = px - scroll.clientWidth / 2;
+          }
         } else {
           otlPlayhead.style.display = 'none';
         }

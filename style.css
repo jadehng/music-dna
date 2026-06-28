@@ -716,6 +716,28 @@ header h1 { font-size: 2.5rem; font-weight: 700; letter-spacing: -0.02em; margin
 }
 .otl-title { font-size: 0.78rem; color: var(--text-dim); }
 .otl-total { font-family: var(--mono); font-size: 0.78rem; color: var(--accent); }
+.otl-scroll {
+  position: relative;
+  overflow-x: auto;
+  overflow-y: hidden;
+  padding-bottom: 6px;
+}
+.otl-ruler {
+  position: relative;
+  height: 16px;
+  margin-bottom: 4px;
+}
+.otl-tick {
+  position: absolute;
+  top: 0;
+  font-family: var(--mono);
+  font-size: 0.6rem;
+  color: var(--text-dim);
+  border-left: 1px solid rgba(180,180,190,0.25);
+  padding-left: 3px;
+  height: 100%;
+  white-space: nowrap;
+}
 .otl-rows { position: relative; }
 .otl-row {
   position: relative;
@@ -757,13 +779,14 @@ header h1 { font-size: 2.5rem; font-weight: 700; letter-spacing: -0.02em; margin
 }
 .otl-playhead {
   position: absolute;
-  top: 32px;
-  bottom: 6px;
+  top: 0;
+  bottom: 0;
   width: 2px;
   background: #fff;
   box-shadow: 0 0 4px rgba(255,255,255,0.8);
   display: none;
   pointer-events: none;
+  z-index: 6;
 }
 
 /* Track audio process buttons */
